@@ -79,7 +79,7 @@ The job also restores and saves `.state/` via `actions/cache`, which is
 what gives the bot memory between runs:
 
 ```yaml
-- name: Ripristina lo stato della deduplicazione
+- name: Restore deduplication state
   uses: actions/cache@v4
   with:
     path: .state
@@ -299,12 +299,12 @@ gh run view "$RUN_ID" --log
 ```
 
 That log is how you confirm the dedup memory is working. You want
-`Stato caricato: N link ...` near the start (or `Nessuno stato ...` on the
+`State loaded: N links ...` near the start (or `No state at ...` on the
 very first run, when there is no cache yet) and `Cache saved with key:
 digest-state-...` in the post-job cleanup:
 
 ```bash
-gh run view "$RUN_ID" --log | grep -Ei 'stato|cache saved|cache not found'
+gh run view "$RUN_ID" --log | grep -Ei 'state loaded|no state at|state saved|cache saved|cache not found'
 ```
 
 From the web interface: **Actions** tab → *Daily news digest* in the left

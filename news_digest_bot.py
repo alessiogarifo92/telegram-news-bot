@@ -1,87 +1,92 @@
 """
-Bot Telegram "news digest": una volta al giorno raccoglie le notizie
-importanti del giorno da Olanda (generale + Amsterdam/AT5), Italia
-(generale), mondo (BBC), AI globale (VentureBeat + The Verge), tech globale
-(TechCrunch + Ars Technica + Hacker News) e finanza globale (Yahoo
-Finance) — e le manda su Telegram **una alla volta, ogni notizia come
-messaggio a sé** — così ogni link ha la sua anteprima (e "Instant View" se
-il sito la supporta) invece di finire tutto attaccato in un unico blocco.
+Telegram "news digest" bot: once a day it collects the day's important
+stories from the Netherlands (general + Amsterdam/AT5), Italy (general),
+the world (BBC), global AI (VentureBeat + The Verge), global tech
+(TechCrunch + Ars Technica + Hacker News) and global finance (Yahoo
+Finance) - and sends them to Telegram **one at a time, every story as its
+own message** - so each link gets its own preview (and "Instant View" where
+the site supports it) instead of everything ending up glued into a single
+block.
 
-Ordine di invio (priorità, dall'alto verso il basso):
-1. Olanda (NOS generale + AT5 Amsterdam)
-2. Italia (ANSA)
-3. Mondo (BBC)
+Send order (priority, top to bottom):
+1. Netherlands (NOS general + AT5 Amsterdam)
+2. Italy (ANSA)
+3. World (BBC)
 4. AI (VentureBeat + The Verge AI)
-5. Tech (TechCrunch + Ars Technica + Hacker News) — AI e Tech ora sono
-   adiacenti, non più separati dalla Finanza
-6. Finanza (Yahoo Finance) — ultima
+5. Tech (TechCrunch + Ars Technica + Hacker News) - AI and Tech are now
+   adjacent, no longer separated by Finance
+6. Finance (Yahoo Finance) - always last
 
-"Solo le notizie importanti": ogni feed configurato è già la selezione
-editoriale "in evidenza" della testata (non un ordine puramente
-cronologico), quindi prendere solo le prime N notizie di ciascun feed
-(MAX_ITEMS_PER_CATEGORY, default 3) equivale a prendere solo le notizie
-più rilevanti del giorno secondo quella fonte.
+"Only the important stories": every configured feed is already the
+outlet's own editorial "top stories" selection (not a purely chronological
+listing), so taking just the first N entries of each feed
+(MAX_ITEMS_PER_CATEGORY) is equivalent to taking only the day's most
+relevant stories according to that source.
 
-"Niente duplicati": AI e Tech usano più fonti apposta (VentureBeat/The
-Verge/arXiv per AI, TechCrunch/Ars Technica/The Guardian/Hacker News per
-tech) invece di più feed della stessa testata, che si sovrappongono per
-natura. In più c'è un controllo di deduplicazione globale (per link
-esatto e per titolo molto simile) che scarta un item se una notizia
-praticamente identica è già stata mandata in una categoria precedente
-nello stesso digest.
+"No duplicates": AI and Tech deliberately use several different outlets
+(VentureBeat/The Verge/arXiv for AI, TechCrunch/Ars Technica/The
+Guardian/Hacker News for tech) instead of several feeds from the same
+outlet, which overlap by nature. On top of that there is a global
+deduplication check (by exact link and by very similar title) that drops an
+item when a practically identical story was already sent in an earlier
+category of the same digest.
 
-Questo controllo vale anche TRA un giorno e l'altro: i link e i titoli
-mandati vengono salvati in `SENT_STATE_FILE` (default `.state/sent.json`)
-e ricaricati al run successivo, con scadenza a `SENT_STATE_TTL_DAYS`
-giorni. Serve perché gli schedule di GitHub Actions slittano e ogni tanto
-saltano un giro: senza memoria tra i run, un digest partito in ritardo
-riproporrebbe notizie già lette, e uno saltato ne farebbe perdere altre.
-Con la memoria attiva `HOURS_LOOKBACK` può stare largo (30h) e coprire i
-buchi senza il rischio di ripetere niente.
+That check also applies BETWEEN one day and the next: the links and titles
+that were sent are stored in `SENT_STATE_FILE` (default
+`.state/sent.json`) and read back on the following run, expiring after
+`SENT_STATE_TTL_DAYS` days. This matters because GitHub Actions schedules
+drift and occasionally skip a run: without memory between runs, a digest
+that started late would replay stories already read, and a skipped one
+would lose others for good. With that memory in place `HOURS_LOOKBACK` can
+stay generous (30h) and cover the gaps with no risk of repeating anything.
 
-"Paper AI (arXiv)": categoria bonus, diversa dalle altre — non è
-giornalismo ma gli ultimi paper accademici cs.AI pubblicati su arXiv
-(API pubblica, nessuna chiave). Titoli spesso molto tecnici, per chi
-vuole seguire anche la ricerca e non solo le notizie.
+"AI papers (arXiv)": a bonus category, different from the others - not
+journalism but the latest cs.AI academic papers published on arXiv (public
+API, no key). Titles are often very technical; it is there for following
+the research and not only the news.
 
-"The Guardian" (sezione Technology): fonte editoriale aggiuntiva per
-Tech, tramite il suo feed RSS pubblico — nessuna chiave, nessuna
-registrazione richiesta (a differenza dell'Open Platform API del
-Guardian, scartata apposta per questo motivo).
+"The Guardian" (Technology section): an extra editorial source for Tech,
+through its public RSS feed - no key, no registration required (unlike the
+Guardian's Open Platform API, which was deliberately not used for exactly
+that reason).
 
-Per le notizie olandesi (fonte NOS/AT5), ogni messaggio contiene sia il
-titolo originale in olandese sia la sua traduzione in inglese. La
-traduzione prova, in ordine, tre motori (tutti via `deep-translator`):
-Google Translate -> MyMemory (entrambi gratuiti, senza API key, ma con
-quote condivise che a volte si esauriscono) -> DeepL (serve una
-`DEEPL_API_KEY` gratuita in `.env`, molto più affidabile; se non
-impostata questo terzo tentativo viene saltato). Se falliscono tutti e
-tre, il messaggio parte comunque con solo il titolo originale.
+For Dutch stories (NOS/AT5), every message carries both the original Dutch
+title and its English translation. Translation tries three engines in
+order (all through `deep-translator`): Google Translate -> MyMemory (both
+free, no API key, but with shared quotas that run out from time to time)
+-> DeepL (needs a free `DEEPL_API_KEY` in `.env`, far more reliable; if it
+is not set this third attempt is skipped). If all three fail, the message
+still goes out with the original title only.
 
-"Una sola notifica al giorno": Telegram manda un avviso (suono/vibrazione)
-per ogni messaggio ricevuto, a meno che il messaggio non sia mandato con
-`disable_notification=True` (in tal caso arriva comunque in chat, ma senza
-avviso). Per evitare 30+ notifiche di fila, SOLO il primo messaggio del
-digest ("📰 Digest notizie — ...") viene mandato con notifica attiva; tutti
-i messaggi successivi (intestazioni di categoria + singole notizie) sono
-silenziosi. Risultato: una sola notifica al giorno, il resto arriva senza
-disturbare.
+"One notification a day": Telegram raises an alert (sound/vibration) for
+every message received, unless the message is sent with
+`disable_notification=True` (in which case it still lands in the chat, just
+silently). To avoid 30+ alerts in a row, ONLY the first message of the
+digest ("Digest notizie - ...") is sent with notifications on; every
+message after it (category headers + individual stories) is silent. The
+result: one notification a day, everything else arrives without
+interrupting.
 
-Non è un bot che "ascolta" messaggi in continuazione: è uno script che gira
-UNA VOLTA e poi finisce — a farlo ripartire ogni mattina ci pensa il
-workflow `.github/workflows/daily-digest.yml` su GitHub Actions (in locale
-va bene un cron/systemd timer / Utilità di pianificazione di Windows,
-vedi README.md).
+This is not a bot that "listens" for messages: it is a script that runs
+ONCE and then exits - restarting it every morning is the job of the
+`.github/workflows/daily-digest.yml` workflow on GitHub Actions (locally a
+cron job / systemd timer / Windows Task Scheduler entry works fine, see
+README.md).
 
-IMPORTANTE: questo script deve girare su una macchina con accesso reale a
-internet (il tuo PC, o una VPS come Oracle Cloud) — non funziona da un
-ambiente sandbox con rete bloccata verso api.telegram.org.
+IMPORTANT: this script has to run on a machine with real internet access
+(your own PC, or a VPS such as Oracle Cloud) - it does not work from a
+sandbox environment whose network is blocked towards api.telegram.org.
 
-Setup rapido:
+Quick setup:
 1. pip install -r requirements.txt
-2. Copia .env.example in .env e riempi i valori (o usa il tuo .env già pronto)
-3. python news_digest_bot.py   (esecuzione singola, per testare)
-4. Programmalo per farlo girare ogni mattina da solo (vedi README.md).
+2. Copy .env.example to .env and fill in the values (or use your existing .env)
+3. python news_digest_bot.py   (single run, for testing)
+4. Schedule it to run every morning on its own (see README.md).
+
+Note on language: comments, docstrings and log messages are in English;
+the strings actually sent to Telegram (the digest header, the category
+labels in FEEDS) are deliberately kept in Italian, because that is what
+the reader of the digest sees.
 """
 
 import json
@@ -104,73 +109,75 @@ log = logging.getLogger("news-digest-bot")
 
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
-# 30 e non 24 apposta: gli schedule di GitHub Actions slittano (anche di
-# mezz'ora abbondante) e ogni tanto un run viene saltato del tutto. Con 24
-# esatte un run in ritardo lascia scoperto un buco di notizie mai viste. Le
-# 6 ore di sovrapposizione lo coprono, e le notizie gia' mandate ieri non
-# tornano perche' le filtra lo stato persistente della deduplicazione
-# (vedi SENT_STATE_FILE). Non alzarlo senza quello stato attivo.
+# 30 and not 24 on purpose: GitHub Actions schedules drift (by half an hour
+# and more) and every so often a run is skipped entirely. With exactly 24,
+# a late run leaves behind a gap of stories no run ever looks at again. The
+# 6 hours of overlap cover it, and stories already sent yesterday do not
+# come back because the persistent dedup state filters them out (see
+# SENT_STATE_FILE). Do not raise this without that state enabled.
 HOURS_LOOKBACK = int(os.environ.get("HOURS_LOOKBACK", "30"))
-# Ridotto apposta: ogni feed qui sotto è già la selezione "in evidenza"
-# della testata (non semplice ordine cronologico), quindi prendere solo le
-# prime 3 significa prendere solo le notizie più importanti del giorno.
+# Kept low on purpose: every feed below is already the outlet's "top
+# stories" selection (not a plain chronological order), so taking just the
+# first few means taking only the day's most important stories.
 MAX_ITEMS_PER_CATEGORY = int(os.environ.get("MAX_ITEMS_PER_CATEGORY", "3"))
 SECONDS_BETWEEN_MESSAGES = float(os.environ.get("SECONDS_BETWEEN_MESSAGES", "1.0"))
-# Sopra questa soglia di similarità tra titoli (0-1), un item viene
-# considerato un duplicato di uno già mandato e viene scartato.
+# Above this title-similarity threshold (0-1), an item is considered a
+# duplicate of one already sent and is discarded.
 DUPLICATE_TITLE_THRESHOLD = float(os.environ.get("DUPLICATE_TITLE_THRESHOLD", "0.6"))
-# Dove salvare i link/titoli gia' mandati, per non ripeterli al run
-# successivo. Senza questo file la deduplicazione vale solo DENTRO un
-# singolo digest, e il "non ripetere" tra un giorno e l'altro dipende solo
-# dal fatto che HOURS_LOOKBACK combaci con la cadenza del cron - cosa che
-# smette di valere appena un run parte in ritardo. Su GitHub Actions il
-# file viene conservato tra un run e l'altro da actions/cache (vedi
-# .github/workflows/daily-digest.yml); in locale sta semplicemente nella
-# cartella del progetto ed e' escluso da .gitignore.
+# Where to store the links/titles already sent, so they are not repeated on
+# the next run. Without this file, deduplication only applies WITHIN a
+# single digest, and "do not repeat" between one day and the next relies
+# purely on HOURS_LOOKBACK matching the cron cadence - which stops being
+# true the moment a run starts late. On GitHub Actions the file is carried
+# between runs by actions/cache (see .github/workflows/daily-digest.yml);
+# locally it simply sits in the project folder and is gitignored.
 SENT_STATE_FILE = Path(os.environ.get("SENT_STATE_FILE", ".state/sent.json"))
-# Dopo quanti giorni una notizia gia' mandata viene dimenticata. 7 e' un
-# compromesso: abbastanza lungo da coprire run saltati per giorni, ma non
-# tanto da far crescere il file all'infinito (il confronto per similarita'
-# di titolo e' lineare sul numero di voci ricordate).
+# After how many days an already-sent story is forgotten. 7 is a
+# compromise: long enough to cover runs skipped for days, but not so long
+# that the file grows without bound (the title-similarity comparison is
+# linear in the number of remembered entries).
 SENT_STATE_TTL_DAYS = int(os.environ.get("SENT_STATE_TTL_DAYS", "7"))
-# Opzionale: se impostata, abilita DeepL come terzo fallback di traduzione
-# (più affidabile di Google/MyMemory). Vedi .env.example per come ottenerla
-# gratis. Se lasciata vuota, il terzo fallback viene semplicemente saltato.
+# Optional: when set, enables DeepL as the third translation fallback
+# (more reliable than Google/MyMemory). See .env.example for how to get one
+# for free. Left empty, the third fallback is simply skipped.
 DEEPL_API_KEY = os.environ.get("DEEPL_API_KEY", "").strip()
 
-# Fonti verificate — vedi il documento Notion "Bot Telegram: guida, esempi
-# e progetti" per le note su ciascuna (uso personale non commerciale, ecc.).
-# "lang": "nl" attiva la traduzione automatica in inglese per quella categoria.
-# "source": "hackernews" salta il parsing RSS e usa l'API ufficiale di HN.
+# Verified sources - see the Notion document "Bot Telegram: guida, esempi
+# e progetti" for the notes on each one (personal non-commercial use, etc.).
+# "lang": "nl" turns on automatic translation into English for that category.
+# "source": "hackernews" skips RSS parsing and uses the official HN API.
 #
-# ORDINE = ORDINE DI INVIO SU TELEGRAM. Rispetta questa priorità:
-# Olanda -> Italia -> Mondo -> AI -> Tech -> Finanza.
-# AI e Tech sono adiacenti apposta (più fonti ciascuna, ma raggruppate),
-# la Finanza resta sempre per ultima e non le separa più.
+# ORDER = SEND ORDER ON TELEGRAM. Keep this priority:
+# Netherlands -> Italy -> World -> AI -> Tech -> Finance.
+# AI and Tech are adjacent on purpose (several sources each, but grouped),
+# and Finance stays last so it no longer splits them apart.
+#
+# The "category" labels are user-facing: they are sent to Telegram as the
+# header of each section, so they stay in Italian.
 FEEDS = [
-    # --- 1. Olanda ---
+    # --- 1. Netherlands ---
     {"category": "🇳🇱 Olanda — generale (NOS)", "url": "https://feeds.nos.nl/nosnieuwsalgemeen", "lang": "nl"},
     {"category": "🏙️ Amsterdam (AT5)", "url": "https://www.at5.nl/rss", "lang": "nl"},
-    # --- 2. Italia ---
+    # --- 2. Italy ---
     {"category": "🇮🇹 Italia — generale (ANSA)", "url": "https://www.ansa.it/sito/notizie/topnews/topnews_rss.xml", "lang": "it"},
-    # --- 3. Mondo ---
+    # --- 3. World ---
     {"category": "🌍 Mondo (BBC)", "url": "https://feeds.bbci.co.uk/news/world/rss.xml", "lang": "en"},
-    # --- 4. AI (globale, più fonti per non dipendere da una sola testata) ---
+    # --- 4. AI (global, several sources so it does not depend on one outlet) ---
     {"category": "🤖 AI (VentureBeat)", "url": "https://venturebeat.com/category/ai/feed/", "lang": "en"},
     {"category": "🤖 AI (The Verge)", "url": "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml", "lang": "en"},
-    # Bonus: paper di ricerca (non giornalismo) — arXiv espone un feed
-    # Atom via query URL, gestito da feedparser come un normale "RSS".
+    # Bonus: research papers (not journalism) - arXiv exposes an Atom feed
+    # through a query URL, which feedparser handles like ordinary RSS.
     {
         "category": "📄 Paper AI (arXiv)",
         "url": "https://export.arxiv.org/api/query?search_query=cat:cs.AI&sortBy=submittedDate&sortOrder=descending&max_results=10",
         "lang": "en",
     },
-    # --- 5. Tech (globale, adiacente all'AI, non più separata dalla finanza) ---
+    # --- 5. Tech (global, adjacent to AI, no longer split off by Finance) ---
     {"category": "💻 Tech (TechCrunch)", "url": "https://techcrunch.com/feed/", "lang": "en"},
     {"category": "💻 Tech (Ars Technica)", "url": "https://arstechnica.com/feed/", "lang": "en"},
     {"category": "💻 Tech (The Guardian)", "url": "https://www.theguardian.com/uk/technology/rss", "lang": "en"},
     {"category": "💻 Tech — Hacker News (community)", "source": "hackernews", "lang": "en"},
-    # --- 6. Finanza (sempre per ultima) ---
+    # --- 6. Finance (always last) ---
     {"category": "💰 Finanza globale (Yahoo Finance)", "url": "https://finance.yahoo.com/news/rssindex", "lang": "en"},
 ]
 
@@ -180,10 +187,10 @@ HACKER_NEWS_ITEMS_TO_FETCH = 3
 
 
 def fetch_feed_items(url: str) -> list[dict]:
-    """Scarica un feed RSS e ritorna gli item delle ultime HOURS_LOOKBACK ore
-    (senza applicare ancora il limite per categoria: quello viene fatto
-    DOPO la deduplicazione, per non scartare per errore un item unico solo
-    perché uno duplicato lo precedeva)."""
+    """Download an RSS feed and return the entries from the last
+    HOURS_LOOKBACK hours (without applying the per-category cap yet: that
+    happens AFTER deduplication, so a unique item is never dropped just
+    because a duplicate happened to come before it)."""
     cutoff = datetime.now(timezone.utc) - timedelta(hours=HOURS_LOOKBACK)
     items = []
     try:
@@ -197,12 +204,12 @@ def fetch_feed_items(url: str) -> list[dict]:
             title = re.sub(r"\s+", " ", entry.get("title", "")).strip()
             items.append({"title": title, "link": entry.get("link", "")})
     except Exception as exc:  # noqa: BLE001
-        log.warning("Errore nel feed %s: %s", url, exc)
+        log.warning("Feed %s failed: %s", url, exc)
     return items
 
 
 def fetch_hacker_news_top() -> list[dict]:
-    """Scarica i top post di Hacker News tramite l'API ufficiale (gratuita, no key)."""
+    """Download the top Hacker News posts through the official API (free, no key)."""
     items = []
     try:
         top_ids = requests.get(HACKER_NEWS_TOP_URL, timeout=10).json()[:HACKER_NEWS_ITEMS_TO_FETCH]
@@ -215,7 +222,7 @@ def fetch_hacker_news_top() -> list[dict]:
                 }
             )
     except Exception as exc:  # noqa: BLE001
-        log.warning("Errore nel recupero di Hacker News: %s", exc)
+        log.warning("Could not fetch Hacker News: %s", exc)
     return items
 
 
@@ -224,10 +231,10 @@ def _normalize_title(title: str) -> str:
 
 
 def _not_expired(entries: dict | None, cutoff: datetime) -> dict[str, str]:
-    """Tiene solo le voci "chiave -> data ISO di invio" piu' recenti di
-    `cutoff`. Una voce con data mancante o malformata viene scartata: se il
-    file si corrompe e' meglio rimandare una notizia vecchia che portarsi
-    dietro voci che non scadranno mai piu'."""
+    """Keep only the "key -> ISO send date" entries newer than `cutoff`. An
+    entry with a missing or malformed date is dropped: if the file gets
+    corrupted, resending an old story beats carrying around entries that
+    would never expire."""
     kept: dict[str, str] = {}
     for key, sent_at in (entries or {}).items():
         try:
@@ -239,26 +246,26 @@ def _not_expired(entries: dict | None, cutoff: datetime) -> dict[str, str]:
 
 
 class Deduplicator:
-    """Tiene traccia dei link e dei titoli già mandati, per scartare
-    notizie sostanzialmente identiche riportate da fonti diverse (es. la
-    stessa notizia AI su VentureBeat e The Verge lo stesso giorno).
+    """Tracks the links and titles already sent, to discard substantially
+    identical stories reported by different sources (e.g. the same AI story
+    on VentureBeat and The Verge on the same day).
 
-    Ricorda su due livelli: dentro il run corrente (due fonti che battono
-    la stessa notizia stamattina) e TRA run diversi — `load()` rilegge cosa
-    è stato mandato nei giorni scorsi e `save()` lo riscrive, scartando le
-    voci più vecchie di `SENT_STATE_TTL_DAYS`. È il secondo livello a
-    rendere il digest immune ai run che slittano o saltano: senza, il
-    "non ripetere" dipende solo dal fatto che HOURS_LOOKBACK combaci con la
-    cadenza del cron.
+    It remembers on two levels: within the current run (two sources running
+    the same story this morning) and ACROSS runs - `load()` reads back what
+    was sent on previous days and `save()` writes it out again, dropping
+    entries older than `SENT_STATE_TTL_DAYS`. It is the second level that
+    makes the digest immune to runs that drift or get skipped: without it,
+    "do not repeat" relies purely on HOURS_LOOKBACK matching the cron
+    cadence.
 
-    Se lo stato manca o è illeggibile si riparte da zero senza fallire: la
-    conseguenza peggiore è un digest che ripete qualcosa, non un digest
-    che non parte."""
+    If the state is missing or unreadable it starts from empty rather than
+    failing: the worst outcome is a digest that repeats something, not a
+    digest that never goes out."""
 
     def __init__(self, threshold: float) -> None:
         self.threshold = threshold
-        # Mappe "chiave -> data ISO di invio" (non set/list) perché serve
-        # sapere quando una voce è stata mandata, per farla scadere.
+        # Maps of "key -> ISO send date" (not sets/lists) because we need to
+        # know when an entry was sent in order to expire it.
         self.seen_links: dict[str, str] = {}
         self.seen_titles: dict[str, str] = {}
 
@@ -278,30 +285,30 @@ class Deduplicator:
         self.seen_titles[_normalize_title(title)] = now
 
     def load(self, path: Path, ttl_days: int) -> None:
-        """Ricarica lo stato dei run precedenti, ignorando le voci scadute."""
+        """Read back the state of previous runs, ignoring expired entries."""
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
         except FileNotFoundError:
-            log.info("Nessuno stato in %s: primo run, o cache non ripristinata.", path)
+            log.info("No state at %s: first run, or cache not restored.", path)
             return
         except (OSError, ValueError) as exc:  # noqa: BLE001
-            log.warning("Stato %s illeggibile (%s): riparto da zero.", path, exc)
+            log.warning("State at %s is unreadable (%s): starting from empty.", path, exc)
             return
 
         cutoff = datetime.now(timezone.utc) - timedelta(days=ttl_days)
         self.seen_links = _not_expired(raw.get("links"), cutoff)
         self.seen_titles = _not_expired(raw.get("titles"), cutoff)
         log.info(
-            "Stato caricato: %s link e %s titoli gia' mandati negli ultimi %s giorni.",
+            "State loaded: %s links and %s titles already sent in the last %s days.",
             len(self.seen_links),
             len(self.seen_titles),
             ttl_days,
         )
 
     def save(self, path: Path, ttl_days: int) -> None:
-        """Riscrive lo stato potato delle voci scadute. Non solleva mai: a
-        questo punto il digest è già stato inviato, e un salvataggio fallito
-        costa al massimo qualche ripetizione domani."""
+        """Write the state back out, pruned of expired entries. Never
+        raises: by this point the digest has already been sent, and a failed
+        save costs at most a few repeats tomorrow."""
         cutoff = datetime.now(timezone.utc) - timedelta(days=ttl_days)
         payload = {
             "links": _not_expired(self.seen_links, cutoff),
@@ -310,25 +317,25 @@ class Deduplicator:
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-            log.info("Stato salvato in %s (%s link ricordati).", path, len(payload["links"]))
+            log.info("State saved to %s (%s links remembered).", path, len(payload["links"]))
         except OSError as exc:  # noqa: BLE001
-            log.warning("Non sono riuscito a salvare lo stato in %s: %s", path, exc)
+            log.warning("Could not save state to %s: %s", path, exc)
 
 
-# Codici lingua nel formato che si aspetta MyMemory (fallback), diverso da
-# quello di Google Translate (che usa solo "nl", "it", ecc.).
+# Language codes in the format MyMemory (the fallback) expects, which
+# differs from Google Translate's (that one just uses "nl", "it", etc.).
 _MYMEMORY_LANG_CODES = {"nl": "nl-NL", "it": "it-IT"}
 
 
 def translate_to_english(text: str, source_lang: str) -> str | None:
-    """Prova, in ordine, Google Translate -> MyMemory -> DeepL (se
-    `DEEPL_API_KEY` è impostata). I primi due sono gratuiti senza API key
-    ma con quote condivise che possono esaurirsi o bloccare richieste
-    automatiche (capita periodicamente, è un limite dei servizi gratuiti,
-    non un bug qui). DeepL è opzionale ma molto più affidabile (500.000
-    caratteri/mese gratis con una key personale). Ritorna None solo se
-    TUTTI i tentativi disponibili falliscono, così il chiamante può
-    mandare solo l'originale senza far fallire l'intero digest."""
+    """Try, in order, Google Translate -> MyMemory -> DeepL (if
+    `DEEPL_API_KEY` is set). The first two are free and need no API key but
+    share public quotas that can run out or start blocking automated
+    requests (this happens periodically; it is a limit of the free
+    services, not a bug here). DeepL is optional but far more reliable
+    (500,000 characters/month free with a personal key). Returns None only
+    if ALL available attempts fail, so the caller can send just the
+    original title instead of failing the whole digest."""
     try:
         from deep_translator import GoogleTranslator
 
@@ -336,7 +343,7 @@ def translate_to_english(text: str, source_lang: str) -> str | None:
         if result:
             return result
     except Exception as exc:  # noqa: BLE001
-        log.warning("Google Translate fallito per %r: %s", text[:50], exc)
+        log.warning("Google Translate failed for %r: %s", text[:50], exc)
 
     try:
         from deep_translator import MyMemoryTranslator
@@ -346,7 +353,7 @@ def translate_to_english(text: str, source_lang: str) -> str | None:
         if result:
             return result
     except Exception as exc:  # noqa: BLE001
-        log.warning("Anche il fallback MyMemory è fallito per %r: %s", text[:50], exc)
+        log.warning("MyMemory fallback also failed for %r: %s", text[:50], exc)
 
     if DEEPL_API_KEY:
         try:
@@ -358,19 +365,19 @@ def translate_to_english(text: str, source_lang: str) -> str | None:
             if result:
                 return result
         except Exception as exc:  # noqa: BLE001
-            log.warning("Anche il fallback DeepL è fallito per %r: %s", text[:50], exc)
+            log.warning("DeepL fallback also failed for %r: %s", text[:50], exc)
 
     return None
 
 
 def send_telegram_message(text: str, silent: bool = True) -> bool:
-    """Manda un singolo messaggio su Telegram. Gestisce il rate limit (429)
-    riprovando dopo il tempo indicato da Telegram. Ritorna True se inviato.
+    """Send a single Telegram message. Handles the rate limit (429) by
+    retrying after the delay Telegram asks for. Returns True if sent.
 
-    `silent=True` (default) manda il messaggio con `disable_notification`,
-    così non genera un avviso sonoro/vibrazione — solo il primo messaggio
-    del digest viene mandato con `silent=False`, per avere una sola
-    notifica al giorno invece di una per ogni notizia."""
+    `silent=True` (the default) sends the message with
+    `disable_notification`, so it raises no sound/vibration - only the
+    first message of the digest is sent with `silent=False`, to get one
+    notification a day instead of one per story."""
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     for attempt in range(3):
         resp = requests.post(
@@ -387,23 +394,22 @@ def send_telegram_message(text: str, silent: bool = True) -> bool:
             return True
         if resp.status_code == 429:
             retry_after = resp.json().get("parameters", {}).get("retry_after", 5)
-            log.warning("Rate limit Telegram, riprovo tra %s secondi...", retry_after)
+            log.warning("Telegram rate limit, retrying in %s seconds...", retry_after)
             time.sleep(retry_after + 1)
             continue
-        log.error("Errore invio Telegram: %s %s", resp.status_code, resp.text)
+        log.error("Telegram send failed: %s %s", resp.status_code, resp.text)
         return False
     return False
 
 
 def send_category(category: str, items: list[dict], lang: str, dedup: Deduplicator) -> bool:
-    """Filtra i duplicati, applica il limite per categoria e manda i
-    messaggi (tutti silenziosi: solo il primo messaggio del digest, in
-    main(), genera una notifica). Ritorna True se almeno una notizia è
-    stata inviata."""
+    """Filter out duplicates, apply the per-category cap and send the
+    messages (all silent: only the first message of the digest, in main(),
+    raises a notification). Returns True if at least one story was sent."""
     fresh_items = []
     for item in items:
         if dedup.is_duplicate(item["title"], item["link"]):
-            log.info("Scartato duplicato: %s", item["title"][:70])
+            log.info("Dropped duplicate: %s", item["title"][:70])
             continue
         dedup.remember(item["title"], item["link"])
         fresh_items.append(item)
@@ -435,11 +441,11 @@ def send_category(category: str, items: list[dict], lang: str, dedup: Deduplicat
 
 
 def main() -> None:
-    log.info("Raccolta notizie dalle ultime %s ore...", HOURS_LOOKBACK)
+    log.info("Collecting stories from the last %s hours...", HOURS_LOOKBACK)
 
     today = datetime.now().strftime("%d/%m/%Y")
-    # Unico messaggio "rumoroso" del digest: genera la sola notifica del
-    # giorno. Tutto il resto (sotto) viene mandato silenzioso.
+    # The only "loud" message of the digest: it produces the single
+    # notification of the day. Everything below it is sent silently.
     send_telegram_message(f"📰 Digest notizie — {today}", silent=False)
     time.sleep(SECONDS_BETWEEN_MESSAGES)
 
@@ -458,12 +464,12 @@ def main() -> None:
     if not any_sent:
         send_telegram_message("Nessuna notizia nuova trovata nelle ultime ore.", silent=True)
 
-    # Sempre dopo l'invio, mai prima: se il bot muore a metà digest è meglio
-    # ripetere domani qualche notizia che marcarne come "mandate" alcune che
-    # non sono mai arrivate.
+    # Always after sending, never before: if the bot dies halfway through
+    # the digest, repeating a few stories tomorrow beats marking as "sent"
+    # items that never actually arrived.
     dedup.save(SENT_STATE_FILE, SENT_STATE_TTL_DAYS)
 
-    log.info("Digest inviato su Telegram (una sola notifica, resto silenzioso, duplicati scartati).")
+    log.info("Digest sent to Telegram (one notification, the rest silent, duplicates dropped).")
 
 
 if __name__ == "__main__":

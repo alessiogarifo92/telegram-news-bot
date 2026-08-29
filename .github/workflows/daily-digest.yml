@@ -2,21 +2,21 @@ name: Daily news digest
 
 on:
   schedule:
-    # 06:17 UTC = 08:17 CEST (ora legale, marzo-ottobre) / 07:17 CET (ora
-    # solare, novembre-marzo). Il cron di GitHub e' sempre in UTC e non si
-    # adatta al cambio d'ora: l'orario locale oscilla di un'ora, che per un
-    # digest mattutino non fa differenza.
+    # 06:17 UTC = 08:17 CEST (summer time, March-October) / 07:17 CET
+    # (winter time, November-March). GitHub's cron is always in UTC and
+    # does not follow daylight saving: the local time shifts by an hour,
+    # which for a morning digest makes no difference.
     #
-    # Perche' :17 e non :00 - gli schedule di GitHub Actions finiscono in
-    # coda insieme a quelli di tutti gli altri repo, e gli orari tondi sono
-    # i piu' affollati: partire a un minuto "dispari" riduce il ritardo.
+    # Why :17 and not :00 - GitHub Actions schedules queue up together with
+    # everyone else's, and round times are the most congested. Starting on
+    # an odd minute reduces the typical delay.
     #
-    # Perche' la mattina - la finestra che si chiude qui contiene gia' per
-    # intero il picco di annunci AI/tech USA della sera prima (che si
-    # esaurisce verso le 23:00 CET), quindi non si perde niente: le notizie
-    # arrivano tutte insieme a colazione invece che sparse nella giornata.
+    # Why the morning - the window closing here already contains the entire
+    # evening peak of US AI/tech announcements from the day before (which
+    # tails off around 23:00 CET), so nothing is missed: the news arrives
+    # all at once at breakfast instead of scattered through the day.
     - cron: '17 6 * * *'
-  workflow_dispatch: {}   # permette di lanciarlo a mano dalla tab "Actions" su GitHub, utile per test
+  workflow_dispatch: {}   # allows starting it by hand from the "Actions" tab, useful for testing
 
 jobs:
   send-digest:
@@ -28,16 +28,17 @@ jobs:
         with:
           python-version: '3.11'
 
-      # Memoria tra un run e l'altro: il bot ci tiene i link/titoli gia'
-      # mandati, cosi' domani non li ripropone. Senza questo passo il "non
-      # ripetere" reggerebbe solo finche' il cron parte puntuale.
+      # Memory between runs: the bot keeps the links/titles it already sent
+      # in here, so tomorrow it does not offer them again. Without this
+      # step, "do not repeat" would only hold as long as the cron fires on
+      # time.
       #
-      # La chiave include run_id, quindi al momento del restore non esiste
-      # mai: il ripristino passa sempre da restore-keys (prefisso), che
-      # pesca la cache piu' recente, e il salvataggio a fine job crea
-      # sempre una voce nuova. E' il pattern standard per una cache che
-      # "rotola" invece di restare congelata alla prima scrittura.
-      - name: Ripristina lo stato della deduplicazione
+      # The key contains run_id, so it never exists at restore time: the
+      # restore always falls through to restore-keys (a prefix match, which
+      # picks the most recent cache), and the post-job save always writes a
+      # fresh entry. This is the standard pattern for a cache that rolls
+      # forward instead of freezing on its first write.
+      - name: Restore deduplication state
         uses: actions/cache@v4
         with:
           path: .state
@@ -51,8 +52,8 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          # Opzionale: terzo fallback di traduzione per i titoli olandesi.
-          # Se il secret non c'e' la variabile arriva vuota e il bot salta
-          # semplicemente quel tentativo.
+          # Optional: third translation fallback for Dutch headlines. If the
+          # secret is not set the variable arrives empty and the bot simply
+          # skips that attempt.
           DEEPL_API_KEY: ${{ secrets.DEEPL_API_KEY }}
         run: python news_digest_bot.py
