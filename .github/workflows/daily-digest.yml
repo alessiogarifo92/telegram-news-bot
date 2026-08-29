@@ -19,10 +19,14 @@ on:
   # Allows starting it by hand from the "Actions" tab, useful for testing.
   workflow_dispatch:
     inputs:
-      reset_dedup_state:
-        description: "Forget the stories already sent (this run may repeat them)"
-        type: boolean
-        default: false
+      mode:
+        description: "What this run should do"
+        type: choice
+        default: send
+        options:
+          - send                 # the normal digest
+          - reset-and-send       # forget everything, then send a full digest
+          - reset-only           # forget everything and send nothing
 
 jobs:
   send-digest:
@@ -52,18 +56,29 @@ jobs:
           restore-keys: |
             digest-state-
 
-      # Escape hatch for the memory above: with the box ticked on a manual
-      # run, the restored state is thrown away and the digest starts from a
-      # clean slate. The post-job cache save then writes the fresh state
-      # under a new key, which is the one the next run restores - so this
-      # resets the memory for good, not just for this run.
+      # Escape hatch for the memory above. The restored state is replaced
+      # by an empty one, which the post-job cache save then writes under a
+      # new key - and that is the key the next run restores, so the reset
+      # holds instead of lasting a single run. The file has to exist and be
+      # valid JSON: actions/cache saves nothing at all for a missing path,
+      # which would leave the old state as the newest cache and quietly
+      # undo the reset.
+      #
+      # "reset-only" exists because the two halves are wanted separately:
+      # resetting before the scheduled morning digest should NOT fire a
+      # second full digest at the moment you press the button.
       - name: Forget the stories already sent
-        if: inputs.reset_dedup_state
-        run: rm -rf .state
+        if: inputs.mode == 'reset-and-send' || inputs.mode == 'reset-only'
+        run: |
+          rm -rf .state
+          mkdir -p .state
+          echo '{}' > .state/sent.json
 
-      - run: pip install -r requirements.txt
+      - if: inputs.mode != 'reset-only'
+        run: pip install -r requirements.txt
 
       - name: Run digest bot
+        if: inputs.mode != 'reset-only'
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}

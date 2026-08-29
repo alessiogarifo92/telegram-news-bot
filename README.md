@@ -1,10 +1,18 @@
 # News Digest Bot — Telegram
 
 Sends a daily news digest to Telegram, in this priority order: Netherlands
-(NOS + AT5 Amsterdam) → Italy (ANSA) → World (BBC) → AI (VentureBeat + The
-Verge AI + arXiv papers) → Tech (TechCrunch + The Verge + Ars Technica +
-The Guardian + Hacker News) → Finance (Yahoo Finance). AI and Tech sit next
-to each other on purpose; Finance is always last.
+(NOS) → Italy (ANSA) → World (BBC) → AI (VentureBeat + The Verge AI +
+arXiv papers) → Tech (TechCrunch + The Verge + Ars Technica + The Guardian
++ Hacker News) → Finance (Yahoo Finance). AI and Tech sit next to each
+other on purpose; Finance is always last.
+
+**Amsterdam (AT5) was removed on 2026-08-29.** `https://www.at5.nl/rss`
+answers HTTP 200 with an HTML page where the feed used to be, and neither
+that page nor `at5.nl` advertises a feed any more, so there is no
+replacement URL to switch to — the entry would have failed silently every
+morning. Amsterdam stories of national weight still come through NOS. If
+AT5 publishes a feed again, the entry goes back in `FEEDS`, where a comment
+marks the spot.
 
 The Verge appears twice on purpose: its AI section under AI, and its main
 feed under Tech, so its reporting outside AI is not lost. Stories that show
@@ -86,16 +94,17 @@ Each run goes through four stages:
    the same story reported by VentureBeat and The Verge only goes out once.
    It also runs **across days** — see
    [What counts as "new"](#what-counts-as-new).
-3. **Cap** — only the first `MAX_ITEMS_PER_CATEGORY` surviving items per
-   category are kept. Every configured feed is already that outlet's own
-   "top stories" selection rather than a raw chronological list, so taking
-   the first few is equivalent to taking the day's most relevant ones.
-   The cap is applied *after* deduplication, so a unique item is never
-   dropped just because a duplicate happened to come before it.
+3. **Cap** — at most `MAX_ITEMS_PER_CATEGORY` surviving items per category
+   are kept (10 by default). It is a ceiling, not a quota: a category with
+   four fresh stories sends four. Every configured feed is already that
+   outlet's own "top stories" selection rather than a raw chronological
+   list, so the whole window is worth reading. The cap is applied *after*
+   deduplication, so a unique item is never dropped just because a
+   duplicate happened to come before it.
 4. **Send** — one Telegram message per headline, ~1s apart, with retry on
    HTTP 429 (rate limit), each formatted as the card described in
    [What a story looks like in the chat](#what-a-story-looks-like-in-the-chat).
-   Dutch stories (NOS, AT5) are sent with both the original title and an
+   Dutch stories (NOS) are sent with both the original title and an
    English translation — and, unless `TRANSLATE_SUMMARIES=0`, with the
    excerpt translated too.
 
@@ -374,12 +383,19 @@ almost nothing the second time — that is the feature working, not a bug.
 **Resetting the memory.** That same feature is why a section can go quiet:
 if everything a source published in the window was already sent by an
 earlier run, the whole section is skipped (the log says so, per category:
-`Tech (The Verge): nothing sent - 8 items in the window, all already sent
-earlier`). To start from a clean slate, tick **Forget the stories already
-sent** when starting the workflow by hand — the restored state is thrown
-away before the run, and the state saved afterwards is the one the next run
-picks up, so the reset sticks. Expect that run to repeat stories you have
-already read.
+`Tech (The Verge): nothing sent - all 10 items in the window were already
+sent`). The manual run takes a **mode** for that:
+
+| Mode | What it does |
+|---|---|
+| `send` | The normal digest. What the daily schedule runs. |
+| `reset-and-send` | Forgets everything, then sends a full digest right away. |
+| `reset-only` | Forgets everything and sends nothing. |
+
+`reset-only` is the one to use before a scheduled run: it clears the memory
+without firing a second digest at the moment you press the button, so the
+next morning's digest is the one that arrives full. Either way the reset
+sticks — the empty state is saved to the cache the next run restores.
 
 ---
 
@@ -422,7 +438,7 @@ on Actions) and all have defaults:
 | `TELEGRAM_CHAT_ID` | — | **Required.** Missing value fails immediately. |
 | `DEEPL_API_KEY` | *(empty)* | Optional third translation fallback. |
 | `HOURS_LOOKBACK` | `30` | How far back a feed entry can be. |
-| `MAX_ITEMS_PER_CATEGORY` | `3` | Headlines kept per category, after dedup. |
+| `MAX_ITEMS_PER_CATEGORY` | `10` | Ceiling on stories per category, after dedup. |
 | `SECONDS_BETWEEN_MESSAGES` | `1.0` | Pause between Telegram sends. |
 | `DUPLICATE_TITLE_THRESHOLD` | `0.6` | Title similarity (0–1) that counts as a duplicate. |
 | `SENT_STATE_FILE` | `.state/sent.json` | Where cross-run memory is stored. |

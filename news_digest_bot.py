@@ -1,6 +1,6 @@
 """
 Telegram "news digest" bot: once a day it collects the day's important
-stories from the Netherlands (general + Amsterdam/AT5), Italy (general),
+stories from the Netherlands (NOS), Italy (general),
 the world (BBC), global AI (VentureBeat + The Verge), global tech
 (TechCrunch + Ars Technica + Hacker News) and global finance (Yahoo
 Finance) - and sends them to Telegram **one at a time, every story as its
@@ -9,7 +9,7 @@ the site supports it) instead of everything ending up glued into a single
 block.
 
 Send order (priority, top to bottom):
-1. Netherlands (NOS general + AT5 Amsterdam)
+1. Netherlands (NOS general)
 2. Italy (ANSA)
 3. World (BBC)
 4. AI (VentureBeat + The Verge AI)
@@ -66,7 +66,12 @@ chapters instead of one unbroken column of messages. Messages are sent with
 `parse_mode="HTML"`, which is why every piece of feed text goes through
 `esc()` first.
 
-For Dutch stories (NOS/AT5), every message carries both the original Dutch
+Amsterdam (AT5) used to be its own category and was removed on 2026-08-29:
+at5.nl stopped serving a feed at the configured URL (HTTP 200, but an HTML
+page) and no longer advertises one anywhere, so there was nothing to point
+the entry at. See the note in FEEDS where it used to sit.
+
+For Dutch stories (NOS), every message carries both the original Dutch
 title and its English translation (and the English excerpt too, unless
 TRANSLATE_SUMMARIES is turned off). Translation tries three engines in
 order (all through `deep-translator`): Google Translate -> MyMemory (both
@@ -135,10 +140,12 @@ TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 # come back because the persistent dedup state filters them out (see
 # SENT_STATE_FILE). Do not raise this without that state enabled.
 HOURS_LOOKBACK = int(os.environ.get("HOURS_LOOKBACK", "30"))
-# Kept low on purpose: every feed below is already the outlet's "top
-# stories" selection (not a plain chronological order), so taking just the
-# first few means taking only the day's most important stories.
-MAX_ITEMS_PER_CATEGORY = int(os.environ.get("MAX_ITEMS_PER_CATEGORY", "3"))
+# A ceiling, not a quota: a category sends what it has, up to this many.
+# Every feed below is already the outlet's own "top stories" selection
+# rather than a plain chronological list, so the whole window is worth
+# reading and 3 was leaving good stories behind. Raising it costs messages
+# (one per story, ~1s apart), not relevance.
+MAX_ITEMS_PER_CATEGORY = int(os.environ.get("MAX_ITEMS_PER_CATEGORY", "10"))
 SECONDS_BETWEEN_MESSAGES = float(os.environ.get("SECONDS_BETWEEN_MESSAGES", "1.0"))
 # Above this title-similarity threshold (0-1), an item is considered a
 # duplicate of one already sent and is discarded.
@@ -203,13 +210,13 @@ FEEDS = [
         "url": "https://feeds.nos.nl/nosnieuwsalgemeen",
         "lang": "nl",
     },
-    {
-        "emoji": "🏙️",
-        "category": "Amsterdam",
-        "source": "AT5",
-        "url": "https://www.at5.nl/rss",
-        "lang": "nl",
-    },
+    # Amsterdam (AT5) was here and is gone: https://www.at5.nl/rss answers
+    # HTTP 200 with an HTML page instead of XML ("not well-formed (invalid
+    # token)" on line 2), and neither that page nor https://www.at5.nl/
+    # advertises a feed any more - so there is no replacement URL to point
+    # at. Removed on 2026-08-29 rather than left in to fail quietly every
+    # morning. Amsterdam stories of national weight still arrive through
+    # NOS. If AT5 publishes a feed again, put the entry back here.
     # --- 2. Italy ---
     {
         "emoji": "🇮🇹",
