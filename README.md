@@ -93,15 +93,27 @@ WantedBy=timers.target
 sudo systemctl enable --now news-digest-bot.timer
 ```
 
-## Sul costo del riassunto AI
+## Cosa conta come notizia "nuova"
 
-`USE_AI_SUMMARY=true` (con `ANTHROPIC_API_KEY` impostata) fa selezionare e
-riassumere le notizie da Claude invece di mandarti titoli grezzi — molto
-più leggibile. È fatturazione API separata dall'abbonamento Claude.ai, ma
-per **una chiamata al giorno** il costo è irrisorio (si parla di centesimi
-al mese, non di più). Se preferisci zero costi aggiuntivi, imposta
-`USE_AI_SUMMARY=false`: ricevi comunque il digest, solo senza selezione né
-riassunto — semplici titoli e link raggruppati per categoria.
+`HOURS_LOOKBACK` decide quanto indietro guardare in ogni feed. **Il default
+è 30 ore, non 24**, anche se il bot gira una volta al giorno.
+
+Le 6 ore in più sono deliberate. Su GitHub Actions gli schedule non partono
+all'orario esatto: finiscono in coda e slittano, e ogni tanto un giro viene
+saltato del tutto. Con una finestra di 24 ore esatte, un run partito con
+un'ora di ritardo lascia scoperta un'ora di notizie che non verranno mai
+lette da nessun run. La sovrapposizione copre il buco.
+
+Quella sovrapposizione non produce ripetizioni perché il bot **ricorda cosa
+ha già mandato tra un run e l'altro**: link e titoli finiscono in
+`SENT_STATE_FILE` (default `.state/sent.json`) e vengono riletti al giro
+dopo, con scadenza a `SENT_STATE_TTL_DAYS` giorni (default 7). Su GitHub
+Actions quel file sopravvive grazie a `actions/cache`; in locale sta nella
+cartella del progetto ed è escluso da `.gitignore`.
+
+I due valori vanno insieme: se disattivi lo stato persistente, rimetti
+`HOURS_LOOKBACK=24`, altrimenti ogni digest ti ripropone le ultime 6 ore
+del giorno prima.
 
 ## Estenderlo
 
