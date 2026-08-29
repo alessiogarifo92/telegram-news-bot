@@ -1,68 +1,406 @@
 # News Digest Bot — Telegram
 
-Manda ogni mattina un digest delle notizie su Telegram, in quest'ordine di
-priorità: Olanda (NOS + AT5 Amsterdam) → Italia (ANSA) → Mondo (BBC) → AI
-(VentureBeat + The Verge + paper arXiv) → Tech (TechCrunch + Ars Technica +
-The Guardian + Hacker News) → Finanza (Yahoo Finance). AI e Tech sono
-raggruppate una dopo l'altra, non più separate dalla Finanza. Non è un bot
-"in ascolto": è uno script che gira una volta al giorno (lo programmi tu
-con cron/systemd) e poi finisce.
+Sends a daily news digest to Telegram, in this priority order: Netherlands
+(NOS + AT5 Amsterdam) → Italy (ANSA) → World (BBC) → AI (VentureBeat + The
+Verge + arXiv papers) → Tech (TechCrunch + Ars Technica + The Guardian +
+Hacker News) → Finance (Yahoo Finance). AI and Tech sit next to each other
+on purpose; Finance is always last.
 
-**Una sola notifica al giorno**: ogni categoria manda ancora un messaggio
-per notizia (per avere l'anteprima/Instant View su ogni link), ma solo il
-primissimo messaggio del digest genera un avviso sonoro su Telegram —
-tutti gli altri sono mandati silenziosi (`disable_notification`). Quindi
-in bacheca vedi comunque tutte le notizie separate, ma il telefono vibra
-una volta sola.
+This is **not** a listening bot. It is a script that runs once and exits.
+In production it is started once a day by GitHub Actions — see
+[How it is set up right now](#how-it-is-set-up-right-now).
 
-## Passaggi che puoi fare solo tu (con il tuo account Telegram)
+**One notification per day.** Every headline is still sent as its own
+Telegram message, so each link gets its own preview (and Instant View where
+the site supports it). But only the very first message of the digest makes
+your phone buzz — everything after it is sent with `disable_notification`.
+You see all the news separated in the chat, and the phone rings once.
 
-1. **Crea il bot**: apri Telegram, scrivi a `@BotFather`, manda `/newbot`,
-   dai un nome e uno username al bot, copia il **token** che ti restituisce.
-2. **Trova il tuo chat ID**: scrivi a `@userinfobot` su Telegram e copia il
-   numero che ti dà (è il tuo ID numerico personale) — oppure scrivi
-   `/start` al tuo nuovo bot e guarda i log al primo avvio dello script
-   (vedi sotto, stampa un errore con l'update ricevuto se il chat ID non è
-   ancora impostato correttamente).
-3. **(Opzionale, consigliato) Chiave DeepL** per traduzioni NL→EN più
-   affidabili: vai su https://www.deepl.com/pro#developer, crea un account
-   gratuito piano "DeepL API Free" (nessuna carta richiesta), copia la key
-   e incollala in `.env` come `DEEPL_API_KEY`. Senza questa key il bot usa
-   solo Google Translate + MyMemory (gratuiti ma con quote condivise che
-   ogni tanto si esauriscono) e, se falliscono entrambi, manda comunque il
-   titolo originale in olandese senza traduzione.
+---
 
-## Setup ed esecuzione di prova
+## How it works
+
+Each run goes through four stages:
+
+1. **Fetch** — every entry in the `FEEDS` list in `news_digest_bot.py` is
+   pulled and parsed. Hacker News is the exception: it uses the official
+   Firebase API instead of RSS. Entries older than `HOURS_LOOKBACK` are
+   dropped.
+2. **Deduplicate** — an item is discarded if its link was already sent, or
+   if its title is at least `DUPLICATE_TITLE_THRESHOLD` similar (0–1,
+   default 0.6) to one already sent. This runs across the whole digest, so
+   the same story reported by VentureBeat and The Verge only goes out once.
+   It also runs **across days** — see
+   [What counts as "new"](#what-counts-as-new).
+3. **Cap** — only the first `MAX_ITEMS_PER_CATEGORY` surviving items per
+   category are kept. Every configured feed is already that outlet's own
+   "top stories" selection rather than a raw chronological list, so taking
+   the first few is equivalent to taking the day's most relevant ones.
+   The cap is applied *after* deduplication, so a unique item is never
+   dropped just because a duplicate happened to come before it.
+4. **Send** — one Telegram message per headline, ~1s apart, with retry on
+   HTTP 429 (rate limit). Dutch headlines (NOS, AT5) are sent with both the
+   original title and an English translation.
+
+**Translation fallback chain** for Dutch headlines: Google Translate →
+MyMemory → DeepL. The first two are free and need no key, but share public
+quotas that run out periodically. DeepL is optional and much more reliable;
+it is skipped entirely if `DEEPL_API_KEY` is not set. If all three fail the
+message still goes out, with the original Dutch title only.
+
+Nothing in the pipeline is allowed to abort the digest: a dead feed, a
+failed translation, or an unwritable state file produces a warning in the
+log and the run continues.
+
+---
+
+## How it is set up right now
+
+The bot runs on **GitHub Actions** in this private repository. No server,
+no VPS, no machine that has to stay on. Two workflows:
+
+### `.github/workflows/daily-digest.yml`
+
+Sends the digest. Schedule: `17 6 * * *` (06:17 UTC = 08:17 CEST in summer,
+07:17 CET in winter).
+
+Two deliberate choices in that cron expression:
+
+- **Morning.** The 30-hour window closing at that time already contains the
+  entire evening peak of US AI/tech announcements from the day before
+  (which tails off around 23:00 CET). Nothing is missed by running early —
+  the news simply arrives together at breakfast instead of scattered
+  through the day.
+- **`:17`, not `:00`.** GitHub queues scheduled workflows across all
+  repositories, and round times are the most congested. An odd minute
+  measurably reduces the typical delay.
+
+The job also restores and saves `.state/` via `actions/cache`, which is
+what gives the bot memory between runs:
+
+```yaml
+- name: Ripristina lo stato della deduplicazione
+  uses: actions/cache@v4
+  with:
+    path: .state
+    key: digest-state-${{ github.run_id }}
+    restore-keys: |
+      digest-state-
+```
+
+The key contains `run_id`, so it never exists at restore time. The restore
+therefore always falls through to `restore-keys` (a prefix match, which
+picks the most recent cache), and the post-job save always writes a fresh
+entry. This is the standard pattern for a cache that *rolls forward*
+instead of freezing on its first write.
+
+### `.github/workflows/keepalive.yml`
+
+Schedule: `0 3 1 * *` (03:00 UTC on the 1st of each month). GitHub disables
+`schedule` triggers on a repository after **60 days without activity**.
+This job writes a timestamp into `.github/.keepalive` and commits it, which
+counts as activity and resets that timer for *every* scheduled workflow in
+the repo — including the digest. It needs `permissions: contents: write`.
+
+Do not delete this workflow. Without it the digest silently stops after two
+quiet months, with no error anywhere.
+
+### Cost
+
+Actions minutes are only billed for private repositories. A run takes
+roughly 70 seconds, so about **35–40 minutes per month** against the 2,000
+free minutes on the Free plan. Making the repo public would make it free,
+at the cost of publishing the code (never the secrets).
+
+---
+
+## Setting up GitHub Secrets
+
+The bot never reads `.env` on GitHub — secrets are injected as environment
+variables by the workflow. Three are used:
+
+| Secret | Required | Purpose |
+|---|---|---|
+| `TELEGRAM_BOT_TOKEN` | Yes | Bot token from `@BotFather` |
+| `TELEGRAM_CHAT_ID` | Yes | Where to send the digest |
+| `DEEPL_API_KEY` | No | Third translation fallback for Dutch headlines |
+
+If `DEEPL_API_KEY` is not set, the workflow passes an empty string and the
+bot simply skips that fallback. It does not fail.
+
+> There is no `GUARDIAN_API_KEY`. The Guardian is read through its public
+> RSS feed, which needs no key — the Open Platform API was deliberately not
+> used for exactly that reason.
+
+### Option A — from the command line (`gh`)
+
+Requires the [GitHub CLI](https://cli.github.com/), authenticated with
+`gh auth login`. Run from inside the repository, so `gh` infers which repo
+to target from the `origin` remote:
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
+gh secret set TELEGRAM_BOT_TOKEN
+```
+
+The command then waits and reads the value from stdin — paste it and press
+Enter. Piping works too, and keeps the value out of your shell history:
+
+```bash
+printf '%s' "123456:ABC-your-token-here" | gh secret set TELEGRAM_BOT_TOKEN
+```
+
+To read the values straight out of your local `.env` without ever printing
+them:
+
+```bash
+set -a && . ./.env && set +a
+printf '%s' "$TELEGRAM_BOT_TOKEN" | gh secret set TELEGRAM_BOT_TOKEN
+printf '%s' "$TELEGRAM_CHAT_ID"   | gh secret set TELEGRAM_CHAT_ID
+printf '%s' "$DEEPL_API_KEY"      | gh secret set DEEPL_API_KEY
+```
+
+Verify — this lists names and update times only, never values:
+
+```bash
+gh secret list
+```
+
+### Option B — from the web interface
+
+1. Open the repository on GitHub.
+2. **Settings** → **Secrets and variables** → **Actions**.
+3. **New repository secret**.
+4. Enter the exact name (`TELEGRAM_BOT_TOKEN`) and paste the value.
+5. **Add secret**. Repeat for each one.
+
+### Things worth knowing about secrets
+
+- They are **write-only**. Once saved, nobody — including you — can read a
+  secret back through the UI or the API. To change one, overwrite it.
+- Actions **masks** them in logs: a secret that reaches the output appears
+  as `***`. Do not rely on this as your only protection — masking matches
+  exact strings, so a value that gets transformed (base64-encoded, split
+  across lines) can leak.
+- Adding, changing, or removing a secret takes effect on the **next** run.
+  Runs already in progress keep the old values.
+- Secrets are **not** available to workflows triggered by pull requests
+  from forks. Irrelevant here, but it is the usual reason a workflow
+  suddenly cannot see them.
+- Names are case-sensitive and must match the workflow exactly. A typo
+  produces an empty variable, not an error — which is why the bot fails
+  loudly on a missing `TELEGRAM_BOT_TOKEN` (`os.environ[...]`, a hard
+  `KeyError`) rather than sending nothing in silence.
+
+---
+
+## Setting up GitHub Actions
+
+If you are wiring this up on a fresh repository:
+
+```bash
+# 1. Create the private repo and push (from the project folder)
+git init
+git add -A
+git status          # confirm .env is NOT listed — it must stay untracked
+git commit -m "Initial commit"
+git branch -M main
+gh repo create telegram-news-bot --private --source=. --remote=origin --push
+
+# 2. Add the secrets (see the section above)
+gh secret set TELEGRAM_BOT_TOKEN
+gh secret set TELEGRAM_CHAT_ID
+gh secret set DEEPL_API_KEY
+
+# 3. Confirm both workflows are registered and active
+gh workflow list
+```
+
+Actions is enabled by default on new repositories. If `gh workflow list`
+comes back empty, check **Settings** → **Actions** → **General** →
+*Allow all actions and reusable workflows*.
+
+Two constraints that catch people out:
+
+- A workflow only becomes visible and schedulable once its file exists on
+  the **default branch** (`main` here). A workflow living only on a feature
+  branch will not run on a schedule and cannot be dispatched.
+- `schedule` triggers **never fire on a brand-new repository until the
+  workflow file has been pushed to the default branch**, and they are
+  disabled again after 60 days of inactivity — which is what
+  `keepalive.yml` exists to prevent.
+
+Scheduled runs are best-effort: GitHub explicitly does not guarantee the
+exact minute, and drops runs entirely under heavy load. The bot is designed
+around that rather than against it — see below.
+
+---
+
+## Running it manually
+
+### Locally, on your machine
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env
-# apri .env e incolla TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID
+cp .env.example .env               # then fill in the values
 python news_digest_bot.py
 ```
 
-Se tutto è configurato bene, entro pochi secondi ricevi il primo digest sul
-tuo bot Telegram.
+Dependencies are `feedparser`, `requests`, `python-dotenv` and
+`deep-translator`. To reinstall or update them later:
 
-## ⚠️ Dove deve girare
+```bash
+pip install -r requirements.txt --upgrade
+```
 
-Questo script deve girare su una macchina con **accesso reale a internet**
-verso `api.telegram.org`: il tuo PC/Mac, oppure una VPS come **Oracle Cloud
-Always Free** (vedi il documento Notion "OpenClaw: guida completa" per come
-crearla gratis). Non funziona da ambienti sandbox con rete ristretta.
+A local run reads `.env` (via `python-dotenv`) and writes its dedup state
+to `.state/sent.json` in the project folder. Both are gitignored. If you
+want a local run that does **not** interfere with the memory of the
+scheduled runs, point it somewhere else:
 
-## Farlo girare da solo ogni giorno
+```bash
+SENT_STATE_FILE=/tmp/test-state.json python news_digest_bot.py
+```
 
-**Opzione A — cron (Linux/macOS), es. ogni giorno alle 7:00:**
+### Triggering the GitHub workflow by hand
+
+Both workflows declare `workflow_dispatch`, so they can be started on
+demand without waiting for the schedule:
+
+```bash
+gh workflow run daily-digest.yml
+```
+
+Give it a few seconds, then check the result:
+
+```bash
+gh run list --workflow=daily-digest.yml --limit 1
+```
+
+`gh run watch` and `gh run view` both take a **run ID**. Without one,
+`gh run view` opens an interactive picker and `gh run watch` fails
+outright, so grab the ID of the latest run first:
+
+```bash
+RUN_ID=$(gh run list --workflow=daily-digest.yml --limit 1 --json databaseId --jq '.[0].databaseId')
+```
+
+Then follow it until it finishes, exiting non-zero if the run failed:
+
+```bash
+gh run watch "$RUN_ID" --exit-status
+```
+
+Or read its full log:
+
+```bash
+gh run view "$RUN_ID" --log
+```
+
+That log is how you confirm the dedup memory is working. You want
+`Stato caricato: N link ...` near the start (or `Nessuno stato ...` on the
+very first run, when there is no cache yet) and `Cache saved with key:
+digest-state-...` in the post-job cleanup:
+
+```bash
+gh run view "$RUN_ID" --log | grep -Ei 'stato|cache saved|cache not found'
+```
+
+From the web interface: **Actions** tab → *Daily news digest* in the left
+sidebar → **Run workflow** → **Run workflow**.
+
+Note that a manual run sends a real digest to your Telegram chat. Because
+the dedup state persists, triggering it twice in a row will correctly send
+almost nothing the second time — that is the feature working, not a bug.
+
+---
+
+## What counts as "new"
+
+`HOURS_LOOKBACK` controls how far back to look in each feed. **The default
+is 30 hours, not 24**, even though the bot runs once a day.
+
+The extra 6 hours are deliberate. GitHub Actions schedules do not start at
+the exact minute: they queue up and drift, and occasionally a run is
+skipped outright. With a window of exactly 24 hours, a run that starts an
+hour late leaves an hour of news uncovered — and no later run ever goes
+back for it. The overlap closes that gap.
+
+The overlap does not cause repeats, because the bot **remembers what it
+already sent between runs**: links and normalised titles are written to
+`SENT_STATE_FILE` (default `.state/sent.json`) and read back on the next
+run, expiring after `SENT_STATE_TTL_DAYS` days (default 7). On GitHub
+Actions that file survives through `actions/cache`; locally it just sits in
+the project folder and is gitignored.
+
+The state is saved **after** the digest has been sent, never before: if the
+bot dies halfway through, it is better to repeat a few headlines tomorrow
+than to mark as "sent" items that never arrived. A missing or corrupted
+state file logs a warning and starts from empty — the worst case is a
+repeated digest, not a digest that fails to go out.
+
+The two settings go together: **if you disable the persistent state, set
+`HOURS_LOOKBACK` back to 24**, otherwise every digest will replay the last
+6 hours of the previous day.
+
+### Configuration reference
+
+All of these are read from the environment (`.env` locally, workflow `env:`
+on Actions) and all have defaults:
+
+| Variable | Default | What it does |
+|---|---|---|
+| `TELEGRAM_BOT_TOKEN` | — | **Required.** Missing value fails immediately. |
+| `TELEGRAM_CHAT_ID` | — | **Required.** Missing value fails immediately. |
+| `DEEPL_API_KEY` | *(empty)* | Optional third translation fallback. |
+| `HOURS_LOOKBACK` | `30` | How far back a feed entry can be. |
+| `MAX_ITEMS_PER_CATEGORY` | `3` | Headlines kept per category, after dedup. |
+| `SECONDS_BETWEEN_MESSAGES` | `1.0` | Pause between Telegram sends. |
+| `DUPLICATE_TITLE_THRESHOLD` | `0.6` | Title similarity (0–1) that counts as a duplicate. |
+| `SENT_STATE_FILE` | `.state/sent.json` | Where cross-run memory is stored. |
+| `SENT_STATE_TTL_DAYS` | `7` | How long a sent item is remembered. |
+
+---
+
+## Things only you can do (with your Telegram account)
+
+1. **Create the bot** — open Telegram, message `@BotFather`, send
+   `/newbot`, give the bot a name and a username, and copy the **token**
+   it returns.
+2. **Find your chat ID** — message `@userinfobot` on Telegram and copy the
+   number it gives you (your personal numeric ID). Alternatively send
+   `/start` to your new bot and read the script's logs on first run.
+3. **(Optional, recommended) DeepL key** for more reliable NL→EN
+   translation: go to https://www.deepl.com/pro#developer, create a free
+   "DeepL API Free" account (no card required), copy the key and set it as
+   `DEEPL_API_KEY`. Without it the bot uses only Google Translate and
+   MyMemory, and falls back to the untranslated Dutch title if both fail.
+
+---
+
+## Where it can run
+
+The script needs **real internet access** to `api.telegram.org` and to the
+RSS sources. GitHub Actions runners have it. Your own machine has it. A
+free VPS (Oracle Cloud Always Free) has it. Restricted sandbox environments
+generally do not — the connection to Telegram, and often to the feeds
+themselves, is blocked there.
+
+### Running it on your own machine instead of Actions
+
+Only needed if you would rather not use GitHub Actions at all.
+
+**cron (Linux/macOS)**, e.g. daily at 07:00:
 
 ```bash
 crontab -e
-# aggiungi questa riga (adatta i percorsi):
+# add this line, adjusting the paths:
 0 7 * * * cd /home/ubuntu/telegram-news-bot && .venv/bin/python news_digest_bot.py >> digest.log 2>&1
 ```
 
-**Opzione B — systemd timer (consigliata su una VPS Linux):**
+**systemd timer** (better on a Linux VPS — `Persistent=true` catches up on
+a run missed while the machine was off, which plain cron will not do):
 
 ```ini
 # /etc/systemd/system/news-digest-bot.service
@@ -79,7 +417,7 @@ EnvironmentFile=/home/ubuntu/telegram-news-bot/.env
 ```ini
 # /etc/systemd/system/news-digest-bot.timer
 [Unit]
-Description=Esegue il News Digest Bot ogni mattina alle 7:00
+Description=Run the News Digest Bot every morning at 7:00
 
 [Timer]
 OnCalendar=*-*-* 07:00:00
@@ -93,47 +431,37 @@ WantedBy=timers.target
 sudo systemctl enable --now news-digest-bot.timer
 ```
 
-## Cosa conta come notizia "nuova"
+If you do this *instead of* Actions, disable the `daily-digest.yml`
+schedule (`gh workflow disable daily-digest.yml`) so you do not get two
+digests a day from two different machines with two separate memories.
 
-`HOURS_LOOKBACK` decide quanto indietro guardare in ogni feed. **Il default
-è 30 ore, non 24**, anche se il bot gira una volta al giorno.
+---
 
-Le 6 ore in più sono deliberate. Su GitHub Actions gli schedule non partono
-all'orario esatto: finiscono in coda e slittano, e ogni tanto un giro viene
-saltato del tutto. Con una finestra di 24 ore esatte, un run partito con
-un'ora di ritardo lascia scoperta un'ora di notizie che non verranno mai
-lette da nessun run. La sovrapposizione copre il buco.
+## Extending it
 
-Quella sovrapposizione non produce ripetizioni perché il bot **ricorda cosa
-ha già mandato tra un run e l'altro**: link e titoli finiscono in
-`SENT_STATE_FILE` (default `.state/sent.json`) e vengono riletti al giro
-dopo, con scadenza a `SENT_STATE_TTL_DAYS` giorni (default 7). Su GitHub
-Actions quel file sopravvive grazie a `actions/cache`; in locale sta nella
-cartella del progetto ed è escluso da `.gitignore`.
-
-I due valori vanno insieme: se disattivi lo stato persistente, rimetti
-`HOURS_LOOKBACK=24`, altrimenti ogni digest ti ripropone le ultime 6 ore
-del giorno prima.
-
-## Estenderlo
-
-- **Finanza**: non esiste un RSS gratuito affidabile per fonti finanziarie
-  serie (Bloomberg/FT/WSJ sono a pagamento) — se ti serve, si può integrare
-  Alpha Vantage (ha un tier gratuito) per dati/notizie di mercato.
-- **Più fonti**: aggiungi voci alla lista `FEEDS` in `news_digest_bot.py`
-  con qualunque feed RSS che vuoi seguire. L'ORDINE della lista è l'ordine
-  di invio su Telegram: rispetta la priorità Olanda → Italia → Mondo → AI
-  → Tech → Finanza (Finanza sempre per ultima). Altre fonti AI/Tech valide
-  oltre a quelle già configurate: MIT Technology Review
+- **More sources**: add entries to the `FEEDS` list in
+  `news_digest_bot.py`. The order of that list **is** the send order on
+  Telegram: keep the priority Netherlands → Italy → World → AI → Tech →
+  Finance, with Finance always last. Other solid AI/tech feeds beyond the
+  ones already configured: MIT Technology Review
   (`https://www.technologyreview.com/topic/artificial-intelligence/feed`
-  per AI, `https://www.technologyreview.com/feed/` per tech), Wired
-  (`https://www.wired.com/feed/tag/ai/latest/rss` per AI,
-  `https://www.wired.com/feed/rss` per tech generale), The Register
+  for AI, `https://www.technologyreview.com/feed/` for tech), Wired
+  (`https://www.wired.com/feed/tag/ai/latest/rss` for AI,
+  `https://www.wired.com/feed/rss` for general tech), The Register
   (`https://www.theregister.com/headlines.atom`).
-- **Verificare un nuovo feed**: dal sandbox di Claude/Cowork non si può
-  testare (rete bloccata anche verso i siti RSS, non solo verso
-  Telegram) — prova il feed direttamente da PowerShell con
-  `python -c "import feedparser; print(feedparser.parse('URL').entries[:2])"`
-  prima di lasciarlo nello script.
-- **Orario diverso o più digest al giorno**: cambia `OnCalendar` nel timer
-  systemd (es. `07:00,19:00` per due digest al giorno).
+- **Check a feed before adding it**: sandboxed environments cannot test
+  this (the network is blocked to RSS sites too, not just Telegram). Try it
+  from a real terminal first:
+
+  ```bash
+  python -c "import feedparser; print(feedparser.parse('URL').entries[:2])"
+  ```
+
+- **Finance**: there is no reliable free RSS feed for serious financial
+  sources (Bloomberg, FT and WSJ are all paywalled). Alpha Vantage has a
+  free tier if you need real market data.
+- **A different time, or more than one digest a day**: change the `cron`
+  expression in `daily-digest.yml`. It is always in UTC and does **not**
+  follow daylight saving, so the local time shifts by an hour twice a year.
+  More than one run a day is safe now that dedup state persists — the
+  second run of the day will only send what appeared since the first.
