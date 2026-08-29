@@ -39,7 +39,7 @@ Politie houdt 40 mensen aan…     ← title, in bold
 Vrijdagmiddag was Brussel het    ← excerpt from the feed's own description,
 toneel van een grote operatie…      cleaned up and cut at a word boundary
 
-🔗 Leggi su NOS                  ← the link, on its own line
+   [ 📖 Leggi su NOS ]           ← button, the way out to the article
 ```
 
 The picture on top comes from `link_preview_options`
@@ -48,13 +48,22 @@ the preview Telegram already builds for that URL, just placed above the
 text instead of below it. Messages are sent with `parse_mode="HTML"`; feed
 text is HTML-escaped before it goes in.
 
+The link is **not** in the text: it sits in an inline button under the
+message (`reply_markup`), which is a real tap target and keeps the message
+down to picture, title and excerpt. **Instant View** cannot be requested
+through the Bot API — Telegram attaches its own "Instant View" button to
+the preview when the site has a template for it, and the button below is
+there either way. Hacker News stories get a second button for the
+discussion thread.
+
 The excerpt is the feed's own `description`, stripped of tags and of the
 boilerplate feeds append to it ("The post … appeared first on …",
 "Continua a leggere", "Lees meer"), then truncated at a word boundary to
 `SUMMARY_MAX_CHARS` (320 by default; set it to `0` to go back to
 titles-only messages). A description that merely repeats the title is
 dropped rather than printed twice. Hacker News posts have no description,
-so they get a points/comments line and a link to the discussion instead.
+so they get a points/comments line and a second button for the discussion
+instead.
 
 ---
 
@@ -123,7 +132,7 @@ what gives the bot memory between runs:
 
 ```yaml
 - name: Restore deduplication state
-  uses: actions/cache@v4
+  uses: actions/cache@v6
   with:
     path: .state
     key: digest-state-${{ github.run_id }}

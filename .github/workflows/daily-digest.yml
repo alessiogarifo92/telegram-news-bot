@@ -22,9 +22,9 @@ jobs:
   send-digest:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
@@ -39,7 +39,7 @@ jobs:
       # fresh entry. This is the standard pattern for a cache that rolls
       # forward instead of freezing on its first write.
       - name: Restore deduplication state
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .state
           key: digest-state-${{ github.run_id }}

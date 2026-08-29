@@ -53,13 +53,17 @@ that reason).
 How a story looks in the chat: every message is laid out like a news
 channel post rather than a bare headline - the article's picture on top
 (Telegram's own link preview, requested large and ABOVE the text through
-`link_preview_options`), then the title in bold, then a short excerpt taken
-from the feed's own description (cleaned of HTML and boilerplate, cut at a
-word boundary at SUMMARY_MAX_CHARS), then the link on its own line. Sections
-are separated by a header carrying a horizontal rule, the section name in
-bold and the outlet plus the number of stories underneath, so the chat reads
-as chapters instead of one unbroken column of messages. Messages are sent
-with `parse_mode="HTML"`, which is why every piece of feed text goes through
+`link_preview_options`), under it the title in bold, then a short excerpt
+taken from the feed's own description (cleaned of HTML and boilerplate, cut
+at a word boundary at SUMMARY_MAX_CHARS), and at the bottom a button that
+opens the article - no URL in the text at all. Telegram adds its own
+"Instant View" button to the preview when the site has a template for it;
+the Bot API cannot ask for that, so the button below is the guaranteed way
+in and Instant View comes on top of it where it exists. Sections are
+separated by a header carrying a horizontal rule, the section name in bold
+and the outlet plus the number of stories underneath, so the chat reads as
+chapters instead of one unbroken column of messages. Messages are sent with
+`parse_mode="HTML"`, which is why every piece of feed text goes through
 `esc()` first.
 
 For Dutch stories (NOS/AT5), every message carries both the original Dutch
@@ -367,17 +371,16 @@ def fetch_hacker_news_top() -> list[dict]:
         for item_id in top_ids:
             data = requests.get(HACKER_NEWS_ITEM_URL.format(id=item_id), timeout=10).json()
             discussion = f"https://news.ycombinator.com/item?id={item_id}"
-            footer = (
-                f"▲ {data.get('score', 0)} punti · "
-                f'<a href="{esc_attr(discussion)}">💬 {data.get("descendants", 0)} commenti</a>'
-            )
+            comments = data.get("descendants", 0)
             items.append(
                 {
                     "title": data.get("title", ""),
                     "link": data.get("url") or discussion,
                     "summary": "",
-                    "footer": footer,
-                    "link_label": "Leggi l'articolo",
+                    "footer": f"▲ {data.get('score', 0)} punti · 💬 {comments} commenti",
+                    "link_label": "📖 Leggi l'articolo",
+                    "discussion_url": discussion,
+                    "discussion_label": f"💬 Discussione ({comments})",
                 }
             )
     except Exception as exc:  # noqa: BLE001
@@ -395,12 +398,6 @@ def esc(text: str) -> str:
     or `&` in them would make Telegram reject the whole message with a 400
     instead of just rendering it oddly."""
     return html.escape(text, quote=False)
-
-
-def esc_attr(url: str) -> str:
-    """Same, for a value that goes inside `href="..."`: here a quote in the
-    URL would close the attribute early, so it has to be escaped too."""
-    return html.escape(url, quote=True)
 
 
 # Boilerplate the feeds append to their own descriptions ("The post X
@@ -602,16 +599,27 @@ def translate_to_english(text: str, source_lang: str) -> str | None:
 _link_preview_options_supported = True
 
 
-def send_telegram_message(text: str, silent: bool = True, preview_url: str | None = None) -> bool:
+def send_telegram_message(
+    text: str,
+    silent: bool = True,
+    preview_url: str | None = None,
+    buttons: list[dict] | None = None,
+) -> bool:
     """Send a single Telegram message, formatted as HTML. Handles the rate
     limit (429) by retrying after the delay Telegram asks for. Returns True
     if sent.
 
-    `preview_url` is the link whose preview should appear ABOVE the text,
-    as a large image - which is what makes a story look like a card
-    (picture, bold headline, excerpt, link) instead of a line of text with
-    a thumbnail glued underneath. Messages without a link (the digest
-    header, the section headers) pass None and get no preview at all.
+    `preview_url` is the link whose preview to show: asked for as a large
+    image and placed ABOVE the text, so the message reads picture -> title
+    -> excerpt. Messages without a link (the digest header, the section
+    headers) pass None and get no preview at all.
+
+    `buttons` is a single row of "open this link" buttons pinned under the
+    message - the way out to the article, instead of a URL sitting in the
+    text. Telegram adds its own "Instant View" button to the preview when
+    the site has a template for it; the Bot API has no way to request that,
+    which is why the button below says "read the article" and lets Telegram
+    offer Instant View on top of it where it can.
 
     `silent=True` (the default) sends the message with
     `disable_notification`, so it raises no sound/vibration - only the
@@ -637,6 +645,15 @@ def send_telegram_message(text: str, silent: bool = True, preview_url: str | Non
             )
         else:
             payload["disable_web_page_preview"] = "false" if preview_url else "true"
+            # Without link_preview_options there is no way to name the URL
+            # to preview, so it has to be in the text for Telegram to find
+            # it - the link lives in a button now, and buttons are invisible
+            # to the preview builder.
+            if preview_url and preview_url not in text:
+                payload["text"] = f"{text}\n\n{preview_url}"[:4096]
+
+        if buttons:
+            payload["reply_markup"] = json.dumps({"inline_keyboard": [buttons]})
 
         resp = requests.post(url, data=payload, timeout=15)
         if resp.ok:
@@ -684,12 +701,13 @@ def format_category_header(feed: dict, count: int) -> str:
     )
 
 
-def format_news_message(item: dict, feed: dict) -> str:
-    """Lay out one story the way a news channel post reads: headline in
-    bold, then the excerpt, then the link on its own line - with the
-    picture above everything, which the caller asks Telegram for through
-    `preview_url`. Blank lines between the three blocks are the whole point:
-    they are what stops title, text and link from running together."""
+def format_news_message(item: dict) -> str:
+    """Lay out one story the way a news channel post reads: the picture on
+    top (the caller asks Telegram for it through `preview_url`), then the
+    headline in bold, then the excerpt. The blank line between title and
+    excerpt is the whole point: it is what stops the two from running
+    together. The link is not in the text at all - it lives in the button
+    row built by `format_news_buttons`."""
     blocks = [f"<b>{esc(item['title'])}</b>"]
     if item.get("title_en"):
         blocks[0] += f"\n🇬🇧 <i>{esc(item['title_en'])}</i>"
@@ -697,10 +715,27 @@ def format_news_message(item: dict, feed: dict) -> str:
         blocks.append(esc(item["summary"]))
     if item.get("footer"):
         blocks.append(item["footer"])
-    if item["link"]:
-        label = item.get("link_label") or f"Leggi su {feed['source']}"
-        blocks.append(f'🔗 <a href="{esc_attr(item["link"])}">{esc(label)}</a>')
     return "\n\n".join(blocks)
+
+
+def format_news_buttons(item: dict, feed: dict) -> list[dict]:
+    """The row of buttons under a story: the way out to the article, and on
+    Hacker News the discussion next to it. A button beats a link in the
+    text - it is a real tap target, and it keeps the message down to
+    picture, title and excerpt.
+
+    Instant View is not in here on purpose: the Bot API cannot request it.
+    Telegram adds its own "Instant View" button to the preview above when
+    the site has a template for it, and these buttons sit underneath
+    whether it does or not."""
+    buttons = []
+    if item["link"]:
+        buttons.append(
+            {"text": item.get("link_label") or f"📖 Leggi su {feed['source']}", "url": item["link"]}
+        )
+    if item.get("discussion_url"):
+        buttons.append({"text": item["discussion_label"], "url": item["discussion_url"]})
+    return buttons
 
 
 def send_category(feed: dict, items: list[dict], dedup: Deduplicator) -> bool:
@@ -727,7 +762,10 @@ def send_category(feed: dict, items: list[dict], dedup: Deduplicator) -> bool:
         if feed["lang"] == "nl":
             translate_dutch_item(item)
         send_telegram_message(
-            format_news_message(item, feed), silent=True, preview_url=item["link"] or None
+            format_news_message(item),
+            silent=True,
+            preview_url=item["link"] or None,
+            buttons=format_news_buttons(item, feed),
         )
         time.sleep(SECONDS_BETWEEN_MESSAGES)
 
