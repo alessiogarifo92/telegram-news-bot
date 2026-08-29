@@ -1,0 +1,14 @@
+# Segreti e config locale
+.env
+
+# Ambiente virtuale Python (non usato su questo PC, ma per sicurezza)
+.venv/
+venv/
+
+# Cache Python
+__pycache__/
+*.pyc
+
+# Stato della deduplicazione tra run (rigenerato a ogni esecuzione,
+# su GitHub Actions vive in actions/cache)
+.state/

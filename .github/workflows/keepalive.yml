@@ -1,0 +1,34 @@
+name: Keepalive
+
+# GitHub disabilita automaticamente i workflow con trigger "schedule" dopo
+# 60 giorni senza attivita' (commit) sul repo. Questo job gira una volta al
+# mese e fa un piccolo commit "finto" (aggiorna un file con la data), cosa
+# che conta come attivita' e resetta il timer per TUTTI i workflow schedulati
+# del repo, incluso questo stesso e daily-digest.yml.
+
+on:
+  schedule:
+    - cron: '0 3 1 * *'   # una volta al mese, il giorno 1 alle 03:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Aggiorna il marker di keepalive
+        run: |
+          mkdir -p .github
+          date -u +"%Y-%m-%dT%H:%M:%SZ" > .github/.keepalive
+
+      - name: Commit e push (solo se qualcosa e' cambiato)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .github/.keepalive
+          git diff --cached --quiet || git commit -m "chore: keepalive (evita la disattivazione automatica dopo 60gg)"
+          git push

@@ -1,0 +1,58 @@
+name: Daily news digest
+
+on:
+  schedule:
+    # 06:17 UTC = 08:17 CEST (ora legale, marzo-ottobre) / 07:17 CET (ora
+    # solare, novembre-marzo). Il cron di GitHub e' sempre in UTC e non si
+    # adatta al cambio d'ora: l'orario locale oscilla di un'ora, che per un
+    # digest mattutino non fa differenza.
+    #
+    # Perche' :17 e non :00 - gli schedule di GitHub Actions finiscono in
+    # coda insieme a quelli di tutti gli altri repo, e gli orari tondi sono
+    # i piu' affollati: partire a un minuto "dispari" riduce il ritardo.
+    #
+    # Perche' la mattina - la finestra che si chiude qui contiene gia' per
+    # intero il picco di annunci AI/tech USA della sera prima (che si
+    # esaurisce verso le 23:00 CET), quindi non si perde niente: le notizie
+    # arrivano tutte insieme a colazione invece che sparse nella giornata.
+    - cron: '17 6 * * *'
+  workflow_dispatch: {}   # permette di lanciarlo a mano dalla tab "Actions" su GitHub, utile per test
+
+jobs:
+  send-digest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # Memoria tra un run e l'altro: il bot ci tiene i link/titoli gia'
+      # mandati, cosi' domani non li ripropone. Senza questo passo il "non
+      # ripetere" reggerebbe solo finche' il cron parte puntuale.
+      #
+      # La chiave include run_id, quindi al momento del restore non esiste
+      # mai: il ripristino passa sempre da restore-keys (prefisso), che
+      # pesca la cache piu' recente, e il salvataggio a fine job crea
+      # sempre una voce nuova. E' il pattern standard per una cache che
+      # "rotola" invece di restare congelata alla prima scrittura.
+      - name: Ripristina lo stato della deduplicazione
+        uses: actions/cache@v4
+        with:
+          path: .state
+          key: digest-state-${{ github.run_id }}
+          restore-keys: |
+            digest-state-
+
+      - run: pip install -r requirements.txt
+
+      - name: Run digest bot
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Opzionale: terzo fallback di traduzione per i titoli olandesi.
+          # Se il secret non c'e' la variabile arriva vuota e il bot salta
+          # semplicemente quel tentativo.
+          DEEPL_API_KEY: ${{ secrets.DEEPL_API_KEY }}
+        run: python news_digest_bot.py
