@@ -115,6 +115,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import feedparser
 import requests
@@ -340,28 +341,47 @@ _LINK_TAG = re.compile(r"<link\b[^>]*>", re.IGNORECASE)
 _HREF = re.compile(r"""href=["']([^"']+)["']""", re.IGNORECASE)
 
 
+def _advertised_feeds(page: str) -> list[str]:
+    """The feeds a page announces to browsers, in document order."""
+    found = []
+    for tag in _LINK_TAG.findall(page[:200_000]):
+        if "rss+xml" not in tag.lower() and "atom+xml" not in tag.lower():
+            continue
+        href = _HREF.search(tag)
+        if href:
+            found.append(href.group(1))
+    return found
+
+
 def describe_dead_feed(url: str) -> str:
     """Fetch a URL that returned no feed entries and say what it serves
-    instead - the content type, plus any feed the page advertises. Called
-    only on the failure path, so the extra request costs nothing on a
-    normal run, and it never raises: this runs while explaining a problem,
-    it must not become one."""
+    instead - the content type, plus any feed it advertises. A page that
+    replaced a feed often announces nothing itself (AT5 does not), so the
+    site's front page is tried next: that is where the "subscribe" tag
+    usually survives a redesign.
+
+    Called only on the failure path, so the extra requests cost nothing on
+    a normal run, and it never raises: this runs while explaining a
+    problem, it must not become one."""
     try:
         resp = requests.get(url, timeout=10)
     except requests.RequestException as exc:
         return f"and a second request could not reach it either ({exc.__class__.__name__})"
 
     content_type = resp.headers.get("content-type", "unknown")
-    advertised = []
-    for tag in _LINK_TAG.findall(resp.text[:200_000]):
-        if "rss+xml" not in tag.lower() and "atom+xml" not in tag.lower():
-            continue
-        href = _HREF.search(tag)
-        if href:
-            advertised.append(href.group(1))
+    advertised = _advertised_feeds(resp.text)
     if advertised:
         return f"it is served as {content_type} and points to: {', '.join(advertised[:5])}"
-    return f"it is served as {content_type} and advertises no feed of its own"
+
+    parts = urlsplit(url)
+    home = f"{parts.scheme}://{parts.netloc}/"
+    try:
+        advertised = _advertised_feeds(requests.get(home, timeout=10).text)
+    except requests.RequestException as exc:
+        return f"it is served as {content_type}, and {home} is unreachable ({exc.__class__.__name__})"
+    if advertised:
+        return f"it is served as {content_type}, but {home} points to: {', '.join(advertised[:5])}"
+    return f"it is served as {content_type}, and neither it nor {home} advertises a feed"
 
 
 def fetch_feed_items(url: str) -> list[dict]:
