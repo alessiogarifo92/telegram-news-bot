@@ -18,6 +18,46 @@ You see all the news separated in the chat, and the phone rings once.
 
 ---
 
+## What a story looks like in the chat
+
+Each story is laid out like a news channel post, not a bare headline:
+
+```
+━━━━━━━━━━━━
+🇳🇱 OLANDA — GENERALE          ← section header: rule + name in bold
+NOS · 3 notizie                  ← outlet and how many stories follow
+```
+
+```
+   ┌───────────────────────┐
+   │  article picture      │     ← Telegram's own link preview, asked for
+   └───────────────────────┘        large and ABOVE the text
+
+Politie houdt 40 mensen aan…     ← title, in bold
+🇬🇧 Police arrest 40 people…      ← English translation (Dutch sources only)
+
+Vrijdagmiddag was Brussel het    ← excerpt from the feed's own description,
+toneel van een grote operatie…      cleaned up and cut at a word boundary
+
+🔗 Leggi su NOS                  ← the link, on its own line
+```
+
+The picture on top comes from `link_preview_options`
+(`prefer_large_media` + `show_above_text`), so nothing is uploaded — it is
+the preview Telegram already builds for that URL, just placed above the
+text instead of below it. Messages are sent with `parse_mode="HTML"`; feed
+text is HTML-escaped before it goes in.
+
+The excerpt is the feed's own `description`, stripped of tags and of the
+boilerplate feeds append to it ("The post … appeared first on …",
+"Continua a leggere", "Lees meer"), then truncated at a word boundary to
+`SUMMARY_MAX_CHARS` (320 by default; set it to `0` to go back to
+titles-only messages). A description that merely repeats the title is
+dropped rather than printed twice. Hacker News posts have no description,
+so they get a points/comments line and a link to the discussion instead.
+
+---
+
 ## How it works
 
 Each run goes through four stages:
@@ -39,8 +79,11 @@ Each run goes through four stages:
    The cap is applied *after* deduplication, so a unique item is never
    dropped just because a duplicate happened to come before it.
 4. **Send** — one Telegram message per headline, ~1s apart, with retry on
-   HTTP 429 (rate limit). Dutch headlines (NOS, AT5) are sent with both the
-   original title and an English translation.
+   HTTP 429 (rate limit), each formatted as the card described in
+   [What a story looks like in the chat](#what-a-story-looks-like-in-the-chat).
+   Dutch stories (NOS, AT5) are sent with both the original title and an
+   English translation — and, unless `TRANSLATE_SUMMARIES=0`, with the
+   excerpt translated too.
 
 **Translation fallback chain** for Dutch headlines: Google Translate →
 MyMemory → DeepL. The first two are free and need no key, but share public
@@ -360,6 +403,8 @@ on Actions) and all have defaults:
 | `DUPLICATE_TITLE_THRESHOLD` | `0.6` | Title similarity (0–1) that counts as a duplicate. |
 | `SENT_STATE_FILE` | `.state/sent.json` | Where cross-run memory is stored. |
 | `SENT_STATE_TTL_DAYS` | `7` | How long a sent item is remembered. |
+| `SUMMARY_MAX_CHARS` | `320` | Length of the excerpt under each title. `0` = titles only. |
+| `TRANSLATE_SUMMARIES` | `1` | Also translate the Dutch excerpt, not just the title. `0` saves translation quota. |
 
 ---
 

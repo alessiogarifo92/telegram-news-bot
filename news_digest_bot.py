@@ -50,8 +50,21 @@ through its public RSS feed - no key, no registration required (unlike the
 Guardian's Open Platform API, which was deliberately not used for exactly
 that reason).
 
+How a story looks in the chat: every message is laid out like a news
+channel post rather than a bare headline - the article's picture on top
+(Telegram's own link preview, requested large and ABOVE the text through
+`link_preview_options`), then the title in bold, then a short excerpt taken
+from the feed's own description (cleaned of HTML and boilerplate, cut at a
+word boundary at SUMMARY_MAX_CHARS), then the link on its own line. Sections
+are separated by a header carrying a horizontal rule, the section name in
+bold and the outlet plus the number of stories underneath, so the chat reads
+as chapters instead of one unbroken column of messages. Messages are sent
+with `parse_mode="HTML"`, which is why every piece of feed text goes through
+`esc()` first.
+
 For Dutch stories (NOS/AT5), every message carries both the original Dutch
-title and its English translation. Translation tries three engines in
+title and its English translation (and the English excerpt too, unless
+TRANSLATE_SUMMARIES is turned off). Translation tries three engines in
 order (all through `deep-translator`): Google Translate -> MyMemory (both
 free, no API key, but with shared quotas that run out from time to time)
 -> DeepL (needs a free `DEEPL_API_KEY` in `.env`, far more reliable; if it
@@ -89,6 +102,7 @@ labels in FEEDS) are deliberately kept in Italian, because that is what
 the reader of the digest sees.
 """
 
+import html
 import json
 import logging
 import os
@@ -137,6 +151,21 @@ SENT_STATE_FILE = Path(os.environ.get("SENT_STATE_FILE", ".state/sent.json"))
 # that the file grows without bound (the title-similarity comparison is
 # linear in the number of remembered entries).
 SENT_STATE_TTL_DAYS = int(os.environ.get("SENT_STATE_TTL_DAYS", "7"))
+# How many characters of the story's own summary (the description that
+# comes with the feed entry) to keep under the title. The point of the
+# excerpt is to tell you whether the story is worth opening without leaving
+# the chat; past ~350 characters the card stops being a card and turns back
+# into a wall of text. Set to 0 to send titles only, as the bot did before.
+SUMMARY_MAX_CHARS = int(os.environ.get("SUMMARY_MAX_CHARS", "320"))
+# Whether to translate the Dutch excerpt as well, not just the title. It
+# costs one extra translation call per Dutch story; turn it off (0) if the
+# free Google/MyMemory quotas start running out. With it off, Dutch stories
+# keep the translated title and the excerpt stays in Dutch.
+TRANSLATE_SUMMARIES = os.environ.get("TRANSLATE_SUMMARIES", "1").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+}
 # Optional: when set, enables DeepL as the third translation fallback
 # (more reliable than Google/MyMemory). See .env.example for how to get one
 # for free. Left empty, the third fallback is simply skipped.
@@ -145,41 +174,147 @@ DEEPL_API_KEY = os.environ.get("DEEPL_API_KEY", "").strip()
 # Verified sources - see the Notion document "Bot Telegram: guida, esempi
 # e progetti" for the notes on each one (personal non-commercial use, etc.).
 # "lang": "nl" turns on automatic translation into English for that category.
-# "source": "hackernews" skips RSS parsing and uses the official HN API.
+# "fetcher": "hackernews" skips RSS parsing and uses the official HN API.
+#
+# Each entry is split into "emoji" + "category" + "source" instead of one
+# pre-formatted label, because the section header sent to Telegram formats
+# the three differently: the name in bold on its own line, the outlet in
+# italics underneath. Keeping them glued together would mean parsing the
+# label back apart at send time.
 #
 # ORDER = SEND ORDER ON TELEGRAM. Keep this priority:
 # Netherlands -> Italy -> World -> AI -> Tech -> Finance.
 # AI and Tech are adjacent on purpose (several sources each, but grouped),
 # and Finance stays last so it no longer splits them apart.
 #
-# The "category" labels are user-facing: they are sent to Telegram as the
-# header of each section, so they stay in Italian.
+# The "category" and "source" labels are user-facing: they are sent to
+# Telegram as the header of each section, so they stay in Italian.
 FEEDS = [
     # --- 1. Netherlands ---
-    {"category": "🇳🇱 Olanda — generale (NOS)", "url": "https://feeds.nos.nl/nosnieuwsalgemeen", "lang": "nl"},
-    {"category": "🏙️ Amsterdam (AT5)", "url": "https://www.at5.nl/rss", "lang": "nl"},
+    {
+        "emoji": "🇳🇱",
+        "category": "Olanda — generale",
+        "source": "NOS",
+        "url": "https://feeds.nos.nl/nosnieuwsalgemeen",
+        "lang": "nl",
+    },
+    {
+        "emoji": "🏙️",
+        "category": "Amsterdam",
+        "source": "AT5",
+        "url": "https://www.at5.nl/rss",
+        "lang": "nl",
+    },
     # --- 2. Italy ---
-    {"category": "🇮🇹 Italia — generale (ANSA)", "url": "https://www.ansa.it/sito/notizie/topnews/topnews_rss.xml", "lang": "it"},
+    {
+        "emoji": "🇮🇹",
+        "category": "Italia — generale",
+        "source": "ANSA",
+        "url": "https://www.ansa.it/sito/notizie/topnews/topnews_rss.xml",
+        "lang": "it",
+    },
     # --- 3. World ---
-    {"category": "🌍 Mondo (BBC)", "url": "https://feeds.bbci.co.uk/news/world/rss.xml", "lang": "en"},
+    {
+        "emoji": "🌍",
+        "category": "Mondo",
+        "source": "BBC",
+        "url": "https://feeds.bbci.co.uk/news/world/rss.xml",
+        "lang": "en",
+    },
     # --- 4. AI (global, several sources so it does not depend on one outlet) ---
-    {"category": "🤖 AI (VentureBeat)", "url": "https://venturebeat.com/category/ai/feed/", "lang": "en"},
-    {"category": "🤖 AI (The Verge)", "url": "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml", "lang": "en"},
+    {
+        "emoji": "🤖",
+        "category": "AI",
+        "source": "VentureBeat",
+        "url": "https://venturebeat.com/category/ai/feed/",
+        "lang": "en",
+    },
+    {
+        "emoji": "🤖",
+        "category": "AI",
+        "source": "The Verge",
+        "url": "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml",
+        "lang": "en",
+    },
     # Bonus: research papers (not journalism) - arXiv exposes an Atom feed
     # through a query URL, which feedparser handles like ordinary RSS.
     {
-        "category": "📄 Paper AI (arXiv)",
+        "emoji": "📄",
+        "category": "Paper AI",
+        "source": "arXiv",
         "url": "https://export.arxiv.org/api/query?search_query=cat:cs.AI&sortBy=submittedDate&sortOrder=descending&max_results=10",
         "lang": "en",
     },
     # --- 5. Tech (global, adjacent to AI, no longer split off by Finance) ---
-    {"category": "💻 Tech (TechCrunch)", "url": "https://techcrunch.com/feed/", "lang": "en"},
-    {"category": "💻 Tech (Ars Technica)", "url": "https://arstechnica.com/feed/", "lang": "en"},
-    {"category": "💻 Tech (The Guardian)", "url": "https://www.theguardian.com/uk/technology/rss", "lang": "en"},
-    {"category": "💻 Tech — Hacker News (community)", "source": "hackernews", "lang": "en"},
+    {
+        "emoji": "💻",
+        "category": "Tech",
+        "source": "TechCrunch",
+        "url": "https://techcrunch.com/feed/",
+        "lang": "en",
+    },
+    {
+        "emoji": "💻",
+        "category": "Tech",
+        "source": "Ars Technica",
+        "url": "https://arstechnica.com/feed/",
+        "lang": "en",
+    },
+    {
+        "emoji": "💻",
+        "category": "Tech",
+        "source": "The Guardian",
+        "url": "https://www.theguardian.com/uk/technology/rss",
+        "lang": "en",
+    },
+    {
+        "emoji": "💻",
+        "category": "Tech",
+        "source": "Hacker News",
+        "fetcher": "hackernews",
+        "lang": "en",
+    },
     # --- 6. Finance (always last) ---
-    {"category": "💰 Finanza globale (Yahoo Finance)", "url": "https://finance.yahoo.com/news/rssindex", "lang": "en"},
+    {
+        "emoji": "💰",
+        "category": "Finanza globale",
+        "source": "Yahoo Finance",
+        "url": "https://finance.yahoo.com/news/rssindex",
+        "lang": "en",
+    },
 ]
+
+# Italian names for the digest header date. `datetime.strftime("%A %d %B")`
+# would give them in whatever locale the machine happens to have, which on
+# GitHub Actions is English - and the header is the one line the reader
+# sees first every morning.
+WEEKDAYS_IT = [
+    "lunedì",
+    "martedì",
+    "mercoledì",
+    "giovedì",
+    "venerdì",
+    "sabato",
+    "domenica",
+]
+MONTHS_IT = [
+    "gennaio",
+    "febbraio",
+    "marzo",
+    "aprile",
+    "maggio",
+    "giugno",
+    "luglio",
+    "agosto",
+    "settembre",
+    "ottobre",
+    "novembre",
+    "dicembre",
+]
+# Horizontal rule used to separate one section from the next. Telegram has
+# no real divider, so a run of box-drawing characters is what gives the
+# chat its "chapters" instead of an unbroken column of messages.
+SECTION_RULE = "━" * 12
 
 HACKER_NEWS_TOP_URL = "https://hacker-news.firebaseio.com/v0/topstories.json"
 HACKER_NEWS_ITEM_URL = "https://hacker-news.firebaseio.com/v0/item/{id}.json"
@@ -190,7 +325,12 @@ def fetch_feed_items(url: str) -> list[dict]:
     """Download an RSS feed and return the entries from the last
     HOURS_LOOKBACK hours (without applying the per-category cap yet: that
     happens AFTER deduplication, so a unique item is never dropped just
-    because a duplicate happened to come before it)."""
+    because a duplicate happened to come before it).
+
+    Each item carries the entry's own summary alongside title and link:
+    that excerpt is what turns the Telegram message from a bare headline
+    into a readable card. Feeds that ship no description simply produce an
+    empty string and the message falls back to title + link."""
     cutoff = datetime.now(timezone.utc) - timedelta(hours=HOURS_LOOKBACK)
     items = []
     try:
@@ -202,23 +342,42 @@ def fetch_feed_items(url: str) -> list[dict]:
                 if pub_dt < cutoff:
                     continue
             title = re.sub(r"\s+", " ", entry.get("title", "")).strip()
-            items.append({"title": title, "link": entry.get("link", "")})
+            items.append(
+                {
+                    "title": title,
+                    "link": entry.get("link", ""),
+                    "summary": clean_summary(entry.get("summary", ""), title),
+                }
+            )
     except Exception as exc:  # noqa: BLE001
         log.warning("Feed %s failed: %s", url, exc)
     return items
 
 
 def fetch_hacker_news_top() -> list[dict]:
-    """Download the top Hacker News posts through the official API (free, no key)."""
+    """Download the top Hacker News posts through the official API (free, no key).
+
+    HN posts have no description to excerpt, so instead of an empty card
+    they get a "footer" line with the two numbers that actually say
+    something about a post there - points and comments - plus a link to the
+    discussion, which is often the reason to open an HN item at all."""
     items = []
     try:
         top_ids = requests.get(HACKER_NEWS_TOP_URL, timeout=10).json()[:HACKER_NEWS_ITEMS_TO_FETCH]
         for item_id in top_ids:
             data = requests.get(HACKER_NEWS_ITEM_URL.format(id=item_id), timeout=10).json()
+            discussion = f"https://news.ycombinator.com/item?id={item_id}"
+            footer = (
+                f"▲ {data.get('score', 0)} punti · "
+                f'<a href="{esc_attr(discussion)}">💬 {data.get("descendants", 0)} commenti</a>'
+            )
             items.append(
                 {
                     "title": data.get("title", ""),
-                    "link": data.get("url") or f"https://news.ycombinator.com/item?id={item_id}",
+                    "link": data.get("url") or discussion,
+                    "summary": "",
+                    "footer": footer,
+                    "link_label": "Leggi l'articolo",
                 }
             )
     except Exception as exc:  # noqa: BLE001
@@ -228,6 +387,72 @@ def fetch_hacker_news_top() -> list[dict]:
 
 def _normalize_title(title: str) -> str:
     return re.sub(r"[^a-z0-9 ]", "", title.lower()).strip()
+
+
+def esc(text: str) -> str:
+    """Escape the text that goes into a `parse_mode="HTML"` message. Titles
+    and excerpts come from feeds we do not control, and a single stray `<`
+    or `&` in them would make Telegram reject the whole message with a 400
+    instead of just rendering it oddly."""
+    return html.escape(text, quote=False)
+
+
+def esc_attr(url: str) -> str:
+    """Same, for a value that goes inside `href="..."`: here a quote in the
+    URL would close the attribute early, so it has to be escaped too."""
+    return html.escape(url, quote=True)
+
+
+# Boilerplate the feeds append to their own descriptions ("The post X
+# appeared first on Y" on WordPress sites, "read more" teasers elsewhere).
+# It is noise in an excerpt whose whole job is to be two readable lines.
+_SUMMARY_NOISE = re.compile(
+    r"(the post\s.+?appeared first on\s.+$"
+    r"|continua a leggere.*$"
+    r"|leggi (tutto|l['’]articolo).*$"
+    r"|read more.*$"
+    r"|lees (meer|verder|het hele artikel).*$"
+    r"|\[…\]$"
+    r"|\[\.\.\.\]$)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _truncate(text: str, limit: int) -> str:
+    """Cut to at most `limit` characters on a word boundary, adding an
+    ellipsis. Cutting mid-word reads like a bug; the ellipsis is what tells
+    the reader the story continues behind the link."""
+    if len(text) <= limit:
+        return text
+    cut = text[:limit].rsplit(" ", 1)[0].rstrip(" ,;:.-–—")
+    return f"{cut}…"
+
+
+def clean_summary(raw: str, title: str) -> str:
+    """Turn the HTML blob a feed calls a "description" into a plain-text
+    excerpt fit for a Telegram message: tags stripped, entities decoded,
+    whitespace collapsed, boilerplate removed, truncated to
+    SUMMARY_MAX_CHARS.
+
+    Returns an empty string when the result would add nothing: no
+    description at all, excerpts turned off, or a "summary" that merely
+    repeats the title (several feeds do exactly that, and repeating the
+    headline under itself looks like a bug)."""
+    if not raw or SUMMARY_MAX_CHARS <= 0:
+        return ""
+    text = re.sub(r"<[^>]+>", " ", raw)
+    text = html.unescape(text)
+    text = re.sub(r"\s+", " ", text).strip()
+    text = _SUMMARY_NOISE.sub("", text).strip(" –—-·")
+    if not text:
+        return ""
+    normalized_summary = _normalize_title(text)
+    normalized_title = _normalize_title(title)
+    if normalized_summary.startswith(normalized_title[:60]) and len(normalized_summary) <= len(
+        normalized_title
+    ) + 10:
+        return ""
+    return _truncate(text, SUMMARY_MAX_CHARS)
 
 
 def _not_expired(entries: dict | None, cutoff: datetime) -> dict[str, str]:
@@ -370,26 +595,50 @@ def translate_to_english(text: str, source_lang: str) -> str | None:
     return None
 
 
-def send_telegram_message(text: str, silent: bool = True) -> bool:
-    """Send a single Telegram message. Handles the rate limit (429) by
-    retrying after the delay Telegram asks for. Returns True if sent.
+# Set to False the first time Telegram rejects `link_preview_options`, so
+# the rest of the digest goes out with the old `disable_web_page_preview`
+# flag instead of failing message after message. Only matters against a
+# self-hosted Bot API server older than 7.0; the official one supports it.
+_link_preview_options_supported = True
+
+
+def send_telegram_message(text: str, silent: bool = True, preview_url: str | None = None) -> bool:
+    """Send a single Telegram message, formatted as HTML. Handles the rate
+    limit (429) by retrying after the delay Telegram asks for. Returns True
+    if sent.
+
+    `preview_url` is the link whose preview should appear ABOVE the text,
+    as a large image - which is what makes a story look like a card
+    (picture, bold headline, excerpt, link) instead of a line of text with
+    a thumbnail glued underneath. Messages without a link (the digest
+    header, the section headers) pass None and get no preview at all.
 
     `silent=True` (the default) sends the message with
     `disable_notification`, so it raises no sound/vibration - only the
     first message of the digest is sent with `silent=False`, to get one
     notification a day instead of one per story."""
+    global _link_preview_options_supported
+
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    for attempt in range(3):
-        resp = requests.post(
-            url,
-            data={
-                "chat_id": TELEGRAM_CHAT_ID,
-                "text": text[:4096],
-                "disable_web_page_preview": False,
-                "disable_notification": "true" if silent else "false",
-            },
-            timeout=15,
-        )
+    for _attempt in range(3):
+        payload = {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": text[:4096],
+            "parse_mode": "HTML",
+            "disable_notification": "true" if silent else "false",
+        }
+        if preview_url and _link_preview_options_supported:
+            payload["link_preview_options"] = json.dumps(
+                {
+                    "url": preview_url,
+                    "prefer_large_media": True,
+                    "show_above_text": True,
+                }
+            )
+        else:
+            payload["disable_web_page_preview"] = "false" if preview_url else "true"
+
+        resp = requests.post(url, data=payload, timeout=15)
         if resp.ok:
             return True
         if resp.status_code == 429:
@@ -397,12 +646,64 @@ def send_telegram_message(text: str, silent: bool = True) -> bool:
             log.warning("Telegram rate limit, retrying in %s seconds...", retry_after)
             time.sleep(retry_after + 1)
             continue
+        if (
+            resp.status_code == 400
+            and _link_preview_options_supported
+            and "link_preview_options" in resp.text
+        ):
+            log.warning("link_preview_options rejected, falling back to plain previews.")
+            _link_preview_options_supported = False
+            continue
         log.error("Telegram send failed: %s %s", resp.status_code, resp.text)
         return False
     return False
 
 
-def send_category(category: str, items: list[dict], lang: str, dedup: Deduplicator) -> bool:
+def format_digest_header(now: datetime) -> str:
+    """The one message of the day that rings: date spelled out in Italian,
+    inside the same rules that separate the sections below it."""
+    date_line = f"{WEEKDAYS_IT[now.weekday()]} {now.day} {MONTHS_IT[now.month - 1]} {now.year}"
+    return (
+        f"{SECTION_RULE}\n"
+        f"📰 <b>DIGEST NOTIZIE</b>\n"
+        f"🗓 <i>{esc(date_line)}</i>\n"
+        f"{SECTION_RULE}"
+    )
+
+
+def format_category_header(feed: dict, count: int) -> str:
+    """Section divider: a rule, the section name in bold next to its emoji,
+    and the outlet plus how many stories follow in small italics. The rule
+    is what gives the chat visible chapters - without it the section header
+    reads as just another message in the column."""
+    stories = "notizia" if count == 1 else "notizie"
+    return (
+        f"{SECTION_RULE}\n"
+        f"{feed['emoji']} <b>{esc(feed['category'].upper())}</b>\n"
+        f"<i>{esc(feed['source'])} · {count} {stories}</i>"
+    )
+
+
+def format_news_message(item: dict, feed: dict) -> str:
+    """Lay out one story the way a news channel post reads: headline in
+    bold, then the excerpt, then the link on its own line - with the
+    picture above everything, which the caller asks Telegram for through
+    `preview_url`. Blank lines between the three blocks are the whole point:
+    they are what stops title, text and link from running together."""
+    blocks = [f"<b>{esc(item['title'])}</b>"]
+    if item.get("title_en"):
+        blocks[0] += f"\n🇬🇧 <i>{esc(item['title_en'])}</i>"
+    if item.get("summary"):
+        blocks.append(esc(item["summary"]))
+    if item.get("footer"):
+        blocks.append(item["footer"])
+    if item["link"]:
+        label = item.get("link_label") or f"Leggi su {feed['source']}"
+        blocks.append(f'🔗 <a href="{esc_attr(item["link"])}">{esc(label)}</a>')
+    return "\n\n".join(blocks)
+
+
+def send_category(feed: dict, items: list[dict], dedup: Deduplicator) -> bool:
     """Filter out duplicates, apply the per-category cap and send the
     messages (all silent: only the first message of the digest, in main(),
     raises a notification). Returns True if at least one story was sent."""
@@ -419,34 +720,37 @@ def send_category(category: str, items: list[dict], lang: str, dedup: Deduplicat
     if not fresh_items:
         return False
 
-    send_telegram_message(f"— {category} —", silent=True)
+    send_telegram_message(format_category_header(feed, len(fresh_items)), silent=True)
     time.sleep(SECONDS_BETWEEN_MESSAGES)
 
     for item in fresh_items:
-        title = item["title"]
-        link = item["link"]
-        if lang == "nl":
-            translation = translate_to_english(title, source_lang="nl")
-            if translation:
-                message = f"🇳🇱 {title}\n🇬🇧 {translation}\n\n{link}"
-            else:
-                message = f"🇳🇱 {title}\n\n{link}"
-        else:
-            message = f"{title}\n\n{link}"
-
-        send_telegram_message(message, silent=True)
+        if feed["lang"] == "nl":
+            translate_dutch_item(item)
+        send_telegram_message(
+            format_news_message(item, feed), silent=True, preview_url=item["link"] or None
+        )
         time.sleep(SECONDS_BETWEEN_MESSAGES)
 
     return True
 
 
+def translate_dutch_item(item: dict) -> None:
+    """Add the English title (and, when TRANSLATE_SUMMARIES is on, the
+    English excerpt) to a Dutch story, in place. Every failure is silent by
+    design: the story still goes out in Dutch rather than not at all."""
+    item["title_en"] = translate_to_english(item["title"], source_lang="nl")
+    if item.get("summary") and TRANSLATE_SUMMARIES:
+        translated = translate_to_english(item["summary"], source_lang="nl")
+        if translated:
+            item["summary"] = translated
+
+
 def main() -> None:
     log.info("Collecting stories from the last %s hours...", HOURS_LOOKBACK)
 
-    today = datetime.now().strftime("%d/%m/%Y")
     # The only "loud" message of the digest: it produces the single
     # notification of the day. Everything below it is sent silently.
-    send_telegram_message(f"📰 Digest notizie — {today}", silent=False)
+    send_telegram_message(format_digest_header(datetime.now()), silent=False)
     time.sleep(SECONDS_BETWEEN_MESSAGES)
 
     dedup = Deduplicator(threshold=DUPLICATE_TITLE_THRESHOLD)
@@ -454,15 +758,17 @@ def main() -> None:
     any_sent = False
 
     for feed in FEEDS:
-        if feed.get("source") == "hackernews":
+        if feed.get("fetcher") == "hackernews":
             items = fetch_hacker_news_top()
         else:
             items = fetch_feed_items(feed["url"])
-        if send_category(feed["category"], items, feed["lang"], dedup):
+        if send_category(feed, items, dedup):
             any_sent = True
 
     if not any_sent:
-        send_telegram_message("Nessuna notizia nuova trovata nelle ultime ore.", silent=True)
+        send_telegram_message(
+            "<i>Nessuna notizia nuova trovata nelle ultime ore.</i>", silent=True
+        )
 
     # Always after sending, never before: if the bot dies halfway through
     # the digest, repeating a few stories tomorrow beats marking as "sent"
