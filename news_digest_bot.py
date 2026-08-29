@@ -332,6 +332,38 @@ HACKER_NEWS_ITEM_URL = "https://hacker-news.firebaseio.com/v0/item/{id}.json"
 HACKER_NEWS_ITEMS_TO_FETCH = 3
 
 
+# A page that replaced a feed still announces the real one, in the <link
+# rel="alternate" type="application/rss+xml"> tag browsers use to offer
+# "subscribe". That tag is the difference between "AT5 is broken" and "AT5
+# moved here", so when a feed comes back empty we go and read it.
+_LINK_TAG = re.compile(r"<link\b[^>]*>", re.IGNORECASE)
+_HREF = re.compile(r"""href=["']([^"']+)["']""", re.IGNORECASE)
+
+
+def describe_dead_feed(url: str) -> str:
+    """Fetch a URL that returned no feed entries and say what it serves
+    instead - the content type, plus any feed the page advertises. Called
+    only on the failure path, so the extra request costs nothing on a
+    normal run, and it never raises: this runs while explaining a problem,
+    it must not become one."""
+    try:
+        resp = requests.get(url, timeout=10)
+    except requests.RequestException as exc:
+        return f"and a second request could not reach it either ({exc.__class__.__name__})"
+
+    content_type = resp.headers.get("content-type", "unknown")
+    advertised = []
+    for tag in _LINK_TAG.findall(resp.text[:200_000]):
+        if "rss+xml" not in tag.lower() and "atom+xml" not in tag.lower():
+            continue
+        href = _HREF.search(tag)
+        if href:
+            advertised.append(href.group(1))
+    if advertised:
+        return f"it is served as {content_type} and points to: {', '.join(advertised[:5])}"
+    return f"it is served as {content_type} and advertises no feed of its own"
+
+
 def fetch_feed_items(url: str) -> list[dict]:
     """Download an RSS feed and return the entries from the last
     HOURS_LOOKBACK hours (without applying the per-category cap yet: that
@@ -368,10 +400,11 @@ def fetch_feed_items(url: str) -> list[dict]:
             # instead of XML), which is the difference between fixing the
             # URL and waiting for the outlet to publish something.
             log.warning(
-                "Feed %s returned no entries at all: HTTP %s, parser said %s.",
+                "Feed %s returned no entries at all: HTTP %s, parser said %s - %s",
                 url,
                 parsed.get("status", "?"),
                 parsed.get("bozo_exception", "nothing"),
+                describe_dead_feed(url),
             )
     except Exception as exc:  # noqa: BLE001
         log.warning("Feed %s failed: %s", url, exc)
