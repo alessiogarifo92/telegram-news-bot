@@ -16,7 +16,13 @@ on:
     # tails off around 23:00 CET), so nothing is missed: the news arrives
     # all at once at breakfast instead of scattered through the day.
     - cron: '17 6 * * *'
-  workflow_dispatch: {}   # allows starting it by hand from the "Actions" tab, useful for testing
+  # Allows starting it by hand from the "Actions" tab, useful for testing.
+  workflow_dispatch:
+    inputs:
+      reset_dedup_state:
+        description: "Forget the stories already sent (this run may repeat them)"
+        type: boolean
+        default: false
 
 jobs:
   send-digest:
@@ -45,6 +51,15 @@ jobs:
           key: digest-state-${{ github.run_id }}
           restore-keys: |
             digest-state-
+
+      # Escape hatch for the memory above: with the box ticked on a manual
+      # run, the restored state is thrown away and the digest starts from a
+      # clean slate. The post-job cache save then writes the fresh state
+      # under a new key, which is the one the next run restores - so this
+      # resets the memory for good, not just for this run.
+      - name: Forget the stories already sent
+        if: inputs.reset_dedup_state
+        run: rm -rf .state
 
       - run: pip install -r requirements.txt
 

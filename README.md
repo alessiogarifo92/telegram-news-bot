@@ -2,9 +2,14 @@
 
 Sends a daily news digest to Telegram, in this priority order: Netherlands
 (NOS + AT5 Amsterdam) → Italy (ANSA) → World (BBC) → AI (VentureBeat + The
-Verge + arXiv papers) → Tech (TechCrunch + Ars Technica + The Guardian +
-Hacker News) → Finance (Yahoo Finance). AI and Tech sit next to each other
-on purpose; Finance is always last.
+Verge AI + arXiv papers) → Tech (TechCrunch + The Verge + Ars Technica +
+The Guardian + Hacker News) → Finance (Yahoo Finance). AI and Tech sit next
+to each other on purpose; Finance is always last.
+
+The Verge appears twice on purpose: its AI section under AI, and its main
+feed under Tech, so its reporting outside AI is not lost. Stories that show
+up in both go out once — the second copy is dropped by the same
+deduplication that handles two outlets running the same story.
 
 This is **not** a listening bot. It is a script that runs once and exits.
 In production it is started once a day by GitHub Actions — see
@@ -365,6 +370,16 @@ sidebar → **Run workflow** → **Run workflow**.
 Note that a manual run sends a real digest to your Telegram chat. Because
 the dedup state persists, triggering it twice in a row will correctly send
 almost nothing the second time — that is the feature working, not a bug.
+
+**Resetting the memory.** That same feature is why a section can go quiet:
+if everything a source published in the window was already sent by an
+earlier run, the whole section is skipped (the log says so, per category:
+`Tech (The Verge): nothing sent - 8 items in the window, all already sent
+earlier`). To start from a clean slate, tick **Forget the stories already
+sent** when starting the workflow by hand — the restored state is thrown
+away before the run, and the state saved afterwards is the one the next run
+picks up, so the reset sticks. Expect that run to repeat stories you have
+already read.
 
 ---
 

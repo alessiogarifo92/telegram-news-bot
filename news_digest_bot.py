@@ -260,6 +260,13 @@ FEEDS = [
     {
         "emoji": "💻",
         "category": "Tech",
+        "source": "The Verge",
+        "url": "https://www.theverge.com/rss/index.xml",
+        "lang": "en",
+    },
+    {
+        "emoji": "💻",
+        "category": "Tech",
         "source": "Ars Technica",
         "url": "https://arstechnica.com/feed/",
         "lang": "en",
@@ -353,6 +360,11 @@ def fetch_feed_items(url: str) -> list[dict]:
                     "summary": clean_summary(entry.get("summary", ""), title),
                 }
             )
+        if not parsed.entries:
+            # An empty feed and a feed whose entries are all older than the
+            # window look identical downstream: both send nothing. Only this
+            # one means the URL itself stopped working.
+            log.warning("Feed %s returned no entries at all (moved or down?).", url)
     except Exception as exc:  # noqa: BLE001
         log.warning("Feed %s failed: %s", url, exc)
     return items
@@ -753,6 +765,12 @@ def send_category(feed: dict, items: list[dict], dedup: Deduplicator) -> bool:
             break
 
     if not fresh_items:
+        log.info(
+            "%s (%s): nothing sent - %s items in the window, all already sent earlier.",
+            feed["category"],
+            feed["source"],
+            len(items),
+        )
         return False
 
     send_telegram_message(format_category_header(feed, len(fresh_items)), silent=True)
