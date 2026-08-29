@@ -363,8 +363,16 @@ def fetch_feed_items(url: str) -> list[dict]:
         if not parsed.entries:
             # An empty feed and a feed whose entries are all older than the
             # window look identical downstream: both send nothing. Only this
-            # one means the URL itself stopped working.
-            log.warning("Feed %s returned no entries at all (moved or down?).", url)
+            # one means the URL itself stopped working - so log what the
+            # server actually answered (404 moved, 403 blocked, an HTML page
+            # instead of XML), which is the difference between fixing the
+            # URL and waiting for the outlet to publish something.
+            log.warning(
+                "Feed %s returned no entries at all: HTTP %s, parser said %s.",
+                url,
+                parsed.get("status", "?"),
+                parsed.get("bozo_exception", "nothing"),
+            )
     except Exception as exc:  # noqa: BLE001
         log.warning("Feed %s failed: %s", url, exc)
     return items
@@ -765,12 +773,15 @@ def send_category(feed: dict, items: list[dict], dedup: Deduplicator) -> bool:
             break
 
     if not fresh_items:
-        log.info(
-            "%s (%s): nothing sent - %s items in the window, all already sent earlier.",
-            feed["category"],
-            feed["source"],
-            len(items),
+        # Two different silences, and only one of them is worth chasing:
+        # a source everyone else already covered, or a source that brought
+        # nothing back at all.
+        reason = (
+            f"all {len(items)} items in the window were already sent"
+            if items
+            else "no items in the window"
         )
+        log.info("%s (%s): nothing sent - %s.", feed["category"], feed["source"], reason)
         return False
 
     send_telegram_message(format_category_header(feed, len(fresh_items)), silent=True)
