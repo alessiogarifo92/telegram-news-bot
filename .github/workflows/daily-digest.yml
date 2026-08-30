@@ -39,9 +39,10 @@ jobs:
           python-version: '3.11'
 
       # Memory between runs: the bot keeps the links/titles it already sent
-      # in here, so tomorrow it does not offer them again. Without this
-      # step, "do not repeat" would only hold as long as the cron fires on
-      # time.
+      # in here (sent.json), so tomorrow it does not offer them again - and,
+      # with TELEGRAM_TOPICS on, the ids of the forum topics it created
+      # (topics.json), so it does not re-create them. Without this step,
+      # "do not repeat" would only hold as long as the cron fires on time.
       #
       # The key contains run_id, so it never exists at restore time: the
       # restore always falls through to restore-keys (a prefix match, which
@@ -70,9 +71,11 @@ jobs:
       - name: Forget the stories already sent
         if: inputs.mode == 'reset-and-send' || inputs.mode == 'reset-only'
         run: |
-          rm -rf .state
           mkdir -p .state
           echo '{}' > .state/sent.json
+          # topics.json is left alone on purpose: forgetting the topic ids
+          # would make the next run create a second set of same-named
+          # topics. This forgets sent stories, not the folders.
 
       - if: inputs.mode != 'reset-only'
         run: pip install -r requirements.txt
@@ -82,6 +85,11 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Optional: "true" to split the digest across three forum topics.
+          # Needs TELEGRAM_CHAT_ID to be a supergroup (-100...) with Topics
+          # on and the bot an admin there. Unset -> empty -> flat single
+          # chat, as before. See README "Folders (Telegram Topics)".
+          TELEGRAM_TOPICS: ${{ secrets.TELEGRAM_TOPICS }}
           # Optional: third translation fallback for Dutch headlines. If the
           # secret is not set the variable arrives empty and the bot simply
           # skips that attempt.

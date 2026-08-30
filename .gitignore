@@ -12,3 +12,6 @@ __pycache__/
 # Stato della deduplicazione tra run (rigenerato a ogni esecuzione,
 # su GitHub Actions vive in actions/cache)
 .state/
+
+# Worktree per-ticket (git-ignored, convenzione globale)
+.claude/worktrees/

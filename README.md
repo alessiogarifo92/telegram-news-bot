@@ -29,6 +29,11 @@ the site supports it). But only the very first message of the digest makes
 your phone buzz — everything after it is sent with `disable_notification`.
 You see all the news separated in the chat, and the phone rings once.
 
+**Optional "folders".** Set `TELEGRAM_TOPICS=true` and point
+`TELEGRAM_CHAT_ID` at a supergroup with Topics enabled, and the digest is
+split across three threads — 📰 Generali, 🤖 Tech & AI, 💰 Finanza — each
+mutable on its own. See [Folders (Telegram Topics)](#folders-telegram-topics).
+
 ---
 
 ## What a story looks like in the chat
@@ -188,7 +193,8 @@ variables by the workflow. Three are used:
 | Secret | Required | Purpose |
 |---|---|---|
 | `TELEGRAM_BOT_TOKEN` | Yes | Bot token from `@BotFather` |
-| `TELEGRAM_CHAT_ID` | Yes | Where to send the digest |
+| `TELEGRAM_CHAT_ID` | Yes | Where to send the digest (personal ID, or a `-100…` supergroup ID for Topics) |
+| `TELEGRAM_TOPICS` | No | `true` to split the digest across three forum topics (default `false`) |
 | `DEEPL_API_KEY` | No | Third translation fallback for Dutch headlines |
 
 If `DEEPL_API_KEY` is not set, the workflow passes an empty string and the
@@ -254,8 +260,8 @@ gh secret list
   suddenly cannot see them.
 - Names are case-sensitive and must match the workflow exactly. A typo
   produces an empty variable, not an error — which is why the bot fails
-  loudly on a missing `TELEGRAM_BOT_TOKEN` (`os.environ[...]`, a hard
-  `KeyError`) rather than sending nothing in silence.
+  loudly at startup on a missing `TELEGRAM_BOT_TOKEN` or `TELEGRAM_CHAT_ID`
+  (`raise SystemExit`) rather than sending nothing in silence.
 
 ---
 
@@ -399,6 +405,52 @@ sticks — the empty state is saved to the cache the next run restores.
 
 ---
 
+## Folders (Telegram Topics)
+
+By default every headline lands in one flat chat. If that is too much in a
+single stream, turn on **Topics**: the digest is then split across three
+threads, each with its own mute switch.
+
+| Topic | Contains |
+|---|---|
+| 📰 **Generali** | Olanda (NOS) · Italia (ANSA) · Mondo (BBC) |
+| 🤖 **Tech & AI** | AI (VentureBeat, The Verge) · Paper arXiv · Tech (TechCrunch, The Verge, Ars Technica, The Guardian, Hacker News) |
+| 💰 **Finanza** | Yahoo Finance |
+
+Inside each topic the per-source section headers still separate the
+sub-sections, so "Generali" is itself divided into Olanda / Italia / Mondo.
+
+### Setup
+
+1. **Create a group** in Telegram, then in its settings turn on **Topics**.
+   A personal chat cannot have topics — it has to be a group, which
+   Telegram promotes to a *supergroup* automatically.
+2. **Add your bot to the group and make it an administrator**, with the
+   *Manage Topics* permission. If the bot does not show up when you try to
+   add it: open **@BotFather → /mybots → your bot → Bot Settings → Allow
+   Groups?** and make sure it is enabled.
+3. **Get the group's chat ID** — add **@getidsbot** (or **@RawDataBot**) to
+   the group, read the `-100…` number it prints, then remove it. Set that
+   as `TELEGRAM_CHAT_ID` (locally in `.env`, on Actions as the secret).
+4. **Set `TELEGRAM_TOPICS=true`** — env var locally; add it as a repository
+   secret for Actions (the workflow already passes it through).
+5. **Run once.** The bot creates the three topics itself and writes their
+   IDs to `.state/topics.json` (`TOPIC_STATE_FILE`), carried between runs
+   by `actions/cache` the same way as `sent.json`. Later runs reuse them.
+
+If anything in step 2 is missing — bot not admin, *Manage Topics* off, the
+chat not a forum — `createForumTopic` fails, the bot logs a warning and
+sends that group to the "General" thread instead. The digest still goes
+out; it just is not split.
+
+The `reset-only` / `reset-and-send` workflow modes forget the *sent
+stories*, not the topics: `topics.json` is left in place so a reset does
+not spawn a second set of same-named topics. To rebuild the topics from
+scratch, delete `topics.json` (locally the file; on Actions, clear the
+cache) and run again.
+
+---
+
 ## What counts as "new"
 
 `HOURS_LOOKBACK` controls how far back to look in each feed. **The default
@@ -436,6 +488,8 @@ on Actions) and all have defaults:
 |---|---|---|
 | `TELEGRAM_BOT_TOKEN` | — | **Required.** Missing value fails immediately. |
 | `TELEGRAM_CHAT_ID` | — | **Required.** Missing value fails immediately. |
+| `TELEGRAM_TOPICS` | `false` | `true` splits the digest across three forum topics. |
+| `TOPIC_STATE_FILE` | `.state/topics.json` | Where the created topic IDs are remembered. |
 | `DEEPL_API_KEY` | *(empty)* | Optional third translation fallback. |
 | `HOURS_LOOKBACK` | `30` | How far back a feed entry can be. |
 | `MAX_ITEMS_PER_CATEGORY` | `10` | Ceiling on stories per category, after dedup. |

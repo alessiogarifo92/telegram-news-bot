@@ -89,6 +89,18 @@ message after it (category headers + individual stories) is silent. The
 result: one notification a day, everything else arrives without
 interrupting.
 
+"Folders" (Telegram Topics): with `TELEGRAM_TOPICS=true` and a chat that is
+a supergroup with Topics enabled, the digest is split across three topics -
+"📰 Generali" (Netherlands + Italy + World), "🤖 Tech & AI" (AI + arXiv
+papers + Tech) and "💰 Finanza" - each a separate thread that can be muted
+on its own. The bot creates the three topics itself on the first run
+(`createForumTopic`) and remembers their ids in `TOPIC_STATE_FILE` (default
+`.state/topics.json`), the same way it remembers already-sent stories.
+Inside each topic the per-source section headers still separate the
+sub-sections (Olanda / Italia / Mondo within "Generali"). Left at the
+default (`false`), or if the chat is not a forum / the bot cannot manage
+topics, everything is sent to the single chat exactly as before.
+
 This is not a bot that "listens" for messages: it is a script that runs
 ONCE and then exits - restarting it every morning is the job of the
 `.github/workflows/daily-digest.yml` workflow on GitHub Actions (locally a
@@ -131,8 +143,11 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("news-digest-bot")
 
-TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
+# Read with .get (not os.environ[...]) so the module can be imported by the
+# test suite without the secrets present. main() still fails loudly with a
+# SystemExit if either is missing at run time.
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 # 30 and not 24 on purpose: GitHub Actions schedules drift (by half an hour
 # and more) and every so often a run is skipped entirely. With exactly 24,
 # a late run leaves behind a gap of stories no run ever looks at again. The
@@ -183,10 +198,46 @@ TRANSLATE_SUMMARIES = os.environ.get("TRANSLATE_SUMMARIES", "1").strip().lower()
 # for free. Left empty, the third fallback is simply skipped.
 DEEPL_API_KEY = os.environ.get("DEEPL_API_KEY", "").strip()
 
+# When true, the digest is split across three Telegram "Topics" (forum
+# threads) instead of landing in one flat chat: each feed is routed to the
+# topic named by its "group" key below. Requires TELEGRAM_CHAT_ID to be a
+# supergroup (-100...) with Topics enabled and the bot to be an
+# administrator there with the "Manage Topics" permission. Any create
+# failure (chat is not a forum, missing permission, ...) is non-fatal: that
+# group falls back to the "General" thread and the digest still goes out.
+TELEGRAM_TOPICS = os.environ.get("TELEGRAM_TOPICS", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+# Where the ids of the topics the bot created are remembered between runs,
+# so it does not re-create them. Same story as SENT_STATE_FILE: carried by
+# actions/cache on GitHub, a plain gitignored file locally. Delete it to
+# make the bot create fresh topics on the next run.
+TOPIC_STATE_FILE = Path(os.environ.get("TOPIC_STATE_FILE", ".state/topics.json"))
+
+# --- Topic (forum) routing ---------------------------------------------
+# Each FEEDS entry carries a "group" key; every group maps to one Telegram
+# topic when TELEGRAM_TOPICS is on. The name and icon colour here are used
+# only when the bot has to CREATE the topic (first run): the colour must be
+# one of the fixed values the Bot API accepts for forum topic icons.
+GROUP_GENERAL = "generali"
+GROUP_TECH_AI = "tech_ai"
+GROUP_FINANCE = "finanza"
+
+TOPIC_DEFINITIONS = [
+    (GROUP_GENERAL, "📰 Generali", 0x6FB9F0),   # blue
+    (GROUP_TECH_AI, "🤖 Tech & AI", 0xCB86DB),  # purple
+    (GROUP_FINANCE, "💰 Finanza", 0x8EEE98),    # green
+]
+
 # Verified sources - see the Notion document "Bot Telegram: guida, esempi
 # e progetti" for the notes on each one (personal non-commercial use, etc.).
 # "lang": "nl" turns on automatic translation into English for that category.
 # "fetcher": "hackernews" skips RSS parsing and uses the official HN API.
+# "group" routes the category to a Telegram topic when TELEGRAM_TOPICS is
+# on (see TOPIC_DEFINITIONS above); ignored when it is off.
 #
 # Each entry is split into "emoji" + "category" + "source" instead of one
 # pre-formatted label, because the section header sent to Telegram formats
@@ -209,6 +260,7 @@ FEEDS = [
         "source": "NOS",
         "url": "https://feeds.nos.nl/nosnieuwsalgemeen",
         "lang": "nl",
+        "group": GROUP_GENERAL,
     },
     # Amsterdam (AT5) was here and is gone: https://www.at5.nl/rss answers
     # HTTP 200 with an HTML page instead of XML ("not well-formed (invalid
@@ -224,6 +276,7 @@ FEEDS = [
         "source": "ANSA",
         "url": "https://www.ansa.it/sito/notizie/topnews/topnews_rss.xml",
         "lang": "it",
+        "group": GROUP_GENERAL,
     },
     # --- 3. World ---
     {
@@ -232,6 +285,7 @@ FEEDS = [
         "source": "BBC",
         "url": "https://feeds.bbci.co.uk/news/world/rss.xml",
         "lang": "en",
+        "group": GROUP_GENERAL,
     },
     # --- 4. AI (global, several sources so it does not depend on one outlet) ---
     {
@@ -240,6 +294,7 @@ FEEDS = [
         "source": "VentureBeat",
         "url": "https://venturebeat.com/category/ai/feed/",
         "lang": "en",
+        "group": GROUP_TECH_AI,
     },
     {
         "emoji": "🤖",
@@ -247,6 +302,7 @@ FEEDS = [
         "source": "The Verge",
         "url": "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml",
         "lang": "en",
+        "group": GROUP_TECH_AI,
     },
     # Bonus: research papers (not journalism) - arXiv exposes an Atom feed
     # through a query URL, which feedparser handles like ordinary RSS.
@@ -256,6 +312,7 @@ FEEDS = [
         "source": "arXiv",
         "url": "https://export.arxiv.org/api/query?search_query=cat:cs.AI&sortBy=submittedDate&sortOrder=descending&max_results=10",
         "lang": "en",
+        "group": GROUP_TECH_AI,
     },
     # --- 5. Tech (global, adjacent to AI, no longer split off by Finance) ---
     {
@@ -264,6 +321,7 @@ FEEDS = [
         "source": "TechCrunch",
         "url": "https://techcrunch.com/feed/",
         "lang": "en",
+        "group": GROUP_TECH_AI,
     },
     {
         "emoji": "💻",
@@ -271,6 +329,7 @@ FEEDS = [
         "source": "The Verge",
         "url": "https://www.theverge.com/rss/index.xml",
         "lang": "en",
+        "group": GROUP_TECH_AI,
     },
     {
         "emoji": "💻",
@@ -278,6 +337,7 @@ FEEDS = [
         "source": "Ars Technica",
         "url": "https://arstechnica.com/feed/",
         "lang": "en",
+        "group": GROUP_TECH_AI,
     },
     {
         "emoji": "💻",
@@ -285,6 +345,7 @@ FEEDS = [
         "source": "The Guardian",
         "url": "https://www.theguardian.com/uk/technology/rss",
         "lang": "en",
+        "group": GROUP_TECH_AI,
     },
     {
         "emoji": "💻",
@@ -292,6 +353,7 @@ FEEDS = [
         "source": "Hacker News",
         "fetcher": "hackernews",
         "lang": "en",
+        "group": GROUP_TECH_AI,
     },
     # --- 6. Finance (always last) ---
     {
@@ -300,6 +362,7 @@ FEEDS = [
         "source": "Yahoo Finance",
         "url": "https://finance.yahoo.com/news/rssindex",
         "lang": "en",
+        "group": GROUP_FINANCE,
     },
 ]
 
@@ -672,6 +735,94 @@ def translate_to_english(text: str, source_lang: str) -> str | None:
     return None
 
 
+def create_forum_topic(name: str, icon_color: int) -> int | None:
+    """Create a forum topic in TELEGRAM_CHAT_ID and return its
+    `message_thread_id`, or None if the call fails (chat is not a forum,
+    the bot is not an admin / cannot manage topics, network error, ...).
+
+    Never raises: a None here just routes that group to the "General"
+    thread instead."""
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/createForumTopic"
+    try:
+        resp = requests.post(
+            url,
+            data={"chat_id": TELEGRAM_CHAT_ID, "name": name, "icon_color": icon_color},
+            timeout=15,
+        )
+    except requests.RequestException as exc:
+        log.warning("createForumTopic(%r) failed: %s", name, exc)
+        return None
+    if not resp.ok:
+        log.warning("createForumTopic(%r) rejected: %s %s", name, resp.status_code, resp.text)
+        return None
+    thread_id = resp.json().get("result", {}).get("message_thread_id")
+    if thread_id is None:
+        log.warning("createForumTopic(%r) returned no message_thread_id", name)
+        return None
+    log.info("Created topic %r (message_thread_id=%s).", name, thread_id)
+    return int(thread_id)
+
+
+def load_topic_ids(path: Path) -> dict[str, int]:
+    """Read back {group_key: message_thread_id} written on a previous run.
+    A missing or unreadable file just means "no topics known yet"."""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as exc:  # noqa: BLE001
+        log.warning("Topic state at %s unreadable (%s): starting fresh.", path, exc)
+        return {}
+    out: dict[str, int] = {}
+    for key, value in (raw or {}).items():
+        try:
+            out[key] = int(value)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def save_topic_ids(path: Path, ids: dict[str, int]) -> None:
+    """Persist {group_key: message_thread_id}. Never raises: a failed save
+    only means the bot tries to create the topics again next run."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(ids, ensure_ascii=False), encoding="utf-8")
+        log.info("Topic state saved to %s (%s topics).", path, len(ids))
+    except OSError as exc:  # noqa: BLE001
+        log.warning("Could not save topic state to %s: %s", path, exc)
+
+
+def resolve_group_threads() -> dict[str, int | None]:
+    """Return {group_key: message_thread_id or None} for every group in
+    TOPIC_DEFINITIONS.
+
+    - TELEGRAM_TOPICS off -> every value is None (flat single-chat send,
+      the original behaviour).
+    - TELEGRAM_TOPICS on  -> each group maps to its remembered topic, or a
+      freshly created one. A group whose topic cannot be created stays None
+      (routed to "General") and is NOT persisted, so a later run retries it.
+    """
+    if not TELEGRAM_TOPICS:
+        return {key: None for key, _, _ in TOPIC_DEFINITIONS}
+
+    known = load_topic_ids(TOPIC_STATE_FILE)
+    threads: dict[str, int | None] = {}
+    changed = False
+    for key, name, color in TOPIC_DEFINITIONS:
+        if key in known:
+            threads[key] = known[key]
+            continue
+        thread_id = create_forum_topic(name, color)
+        threads[key] = thread_id
+        if thread_id is not None:
+            known[key] = thread_id
+            changed = True
+    if changed:
+        save_topic_ids(TOPIC_STATE_FILE, known)
+    return threads
+
+
 # Set to False the first time Telegram rejects `link_preview_options`, so
 # the rest of the digest goes out with the old `disable_web_page_preview`
 # flag instead of failing message after message. Only matters against a
@@ -684,6 +835,7 @@ def send_telegram_message(
     silent: bool = True,
     preview_url: str | None = None,
     buttons: list[dict] | None = None,
+    thread_id: int | None = None,
 ) -> bool:
     """Send a single Telegram message, formatted as HTML. Handles the rate
     limit (429) by retrying after the delay Telegram asks for. Returns True
@@ -704,7 +856,11 @@ def send_telegram_message(
     `silent=True` (the default) sends the message with
     `disable_notification`, so it raises no sound/vibration - only the
     first message of the digest is sent with `silent=False`, to get one
-    notification a day instead of one per story."""
+    notification a day instead of one per story.
+
+    `thread_id`, when set, is passed as `message_thread_id` so the message
+    lands in that forum topic instead of the flat chat / "General"
+    thread."""
     global _link_preview_options_supported
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -715,6 +871,8 @@ def send_telegram_message(
             "parse_mode": "HTML",
             "disable_notification": "true" if silent else "false",
         }
+        if thread_id is not None:
+            payload["message_thread_id"] = thread_id
         if preview_url and _link_preview_options_supported:
             payload["link_preview_options"] = json.dumps(
                 {
@@ -818,10 +976,14 @@ def format_news_buttons(item: dict, feed: dict) -> list[dict]:
     return buttons
 
 
-def send_category(feed: dict, items: list[dict], dedup: Deduplicator) -> bool:
+def send_category(
+    feed: dict, items: list[dict], dedup: Deduplicator, thread_id: int | None = None
+) -> bool:
     """Filter out duplicates, apply the per-category cap and send the
     messages (all silent: only the first message of the digest, in main(),
-    raises a notification). Returns True if at least one story was sent."""
+    raises a notification). Every message goes to `thread_id` when set, so
+    the whole section stays inside one forum topic. Returns True if at
+    least one story was sent."""
     fresh_items = []
     for item in items:
         if dedup.is_duplicate(item["title"], item["link"]):
@@ -844,7 +1006,9 @@ def send_category(feed: dict, items: list[dict], dedup: Deduplicator) -> bool:
         log.info("%s (%s): nothing sent - %s.", feed["category"], feed["source"], reason)
         return False
 
-    send_telegram_message(format_category_header(feed, len(fresh_items)), silent=True)
+    send_telegram_message(
+        format_category_header(feed, len(fresh_items)), silent=True, thread_id=thread_id
+    )
     time.sleep(SECONDS_BETWEEN_MESSAGES)
 
     for item in fresh_items:
@@ -855,6 +1019,7 @@ def send_category(feed: dict, items: list[dict], dedup: Deduplicator) -> bool:
             silent=True,
             preview_url=item["link"] or None,
             buttons=format_news_buttons(item, feed),
+            thread_id=thread_id,
         )
         time.sleep(SECONDS_BETWEEN_MESSAGES)
 
@@ -873,11 +1038,25 @@ def translate_dutch_item(item: dict) -> None:
 
 
 def main() -> None:
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        raise SystemExit(
+            "TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be set "
+            "(.env locally, workflow secrets on GitHub Actions)."
+        )
+
     log.info("Collecting stories from the last %s hours...", HOURS_LOOKBACK)
 
+    # With TELEGRAM_TOPICS off this is {group: None} and everything below
+    # behaves exactly as before.
+    group_threads = resolve_group_threads()
+    general_thread = group_threads.get(GROUP_GENERAL)
+
     # The only "loud" message of the digest: it produces the single
-    # notification of the day. Everything below it is sent silently.
-    send_telegram_message(format_digest_header(datetime.now()), silent=False)
+    # notification of the day. Everything below it is sent silently. When
+    # topics are on it opens the "Generali" thread.
+    send_telegram_message(
+        format_digest_header(datetime.now()), silent=False, thread_id=general_thread
+    )
     time.sleep(SECONDS_BETWEEN_MESSAGES)
 
     dedup = Deduplicator(threshold=DUPLICATE_TITLE_THRESHOLD)
@@ -889,12 +1068,14 @@ def main() -> None:
             items = fetch_hacker_news_top()
         else:
             items = fetch_feed_items(feed["url"])
-        if send_category(feed, items, dedup):
+        if send_category(feed, items, dedup, thread_id=group_threads.get(feed["group"])):
             any_sent = True
 
     if not any_sent:
         send_telegram_message(
-            "<i>Nessuna notizia nuova trovata nelle ultime ore.</i>", silent=True
+            "<i>Nessuna notizia nuova trovata nelle ultime ore.</i>",
+            silent=True,
+            thread_id=general_thread,
         )
 
     # Always after sending, never before: if the bot dies halfway through
