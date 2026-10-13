@@ -269,6 +269,36 @@ def test_resolve_group_threads_failed_group_stays_none_and_is_not_persisted(tmp_
     assert bot.GROUP_FINANCE not in json.loads(state.read_text())
 
 
+def test_resolve_group_threads_pinned_ids_win_without_creating(tmp_path, monkeypatch):
+    # The cache-eviction case: topics.json is gone, but the pinned ids keep
+    # the bot on the existing topics instead of creating a second set.
+    state = tmp_path / "topics.json"
+    monkeypatch.setattr(bot, "TELEGRAM_TOPICS", True)
+    monkeypatch.setattr(bot, "TOPIC_STATE_FILE", state)
+    monkeypatch.setattr(
+        bot, "TELEGRAM_TOPIC_IDS", '{"generali": 3190, "tech_ai": 3191, "finanza": 3192}')
+
+    def fake_create(name, color):
+        raise AssertionError(f"should not create {name}")
+
+    monkeypatch.setattr(bot, "create_forum_topic", fake_create)
+
+    threads = bot.resolve_group_threads()
+    assert threads == {bot.GROUP_GENERAL: 3190, bot.GROUP_TECH_AI: 3191, bot.GROUP_FINANCE: 3192}
+    assert not state.exists()
+
+
+def test_resolve_group_threads_malformed_pinned_ids_fall_back_to_state(tmp_path, monkeypatch):
+    state = tmp_path / "topics.json"
+    state.write_text(json.dumps({"generali": 1, "tech_ai": 2, "finanza": 3}))
+    monkeypatch.setattr(bot, "TELEGRAM_TOPICS", True)
+    monkeypatch.setattr(bot, "TOPIC_STATE_FILE", state)
+    monkeypatch.setattr(bot, "TELEGRAM_TOPIC_IDS", "{not json")
+
+    threads = bot.resolve_group_threads()
+    assert threads == {bot.GROUP_GENERAL: 1, bot.GROUP_TECH_AI: 2, bot.GROUP_FINANCE: 3}
+
+
 def test_load_topic_ids_skips_non_integer_values(tmp_path):
     p = tmp_path / "topics.json"
     p.write_text(json.dumps({"generali": 5, "tech_ai": "oops", "finanza": None}))

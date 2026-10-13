@@ -90,6 +90,12 @@ jobs:
           # on and the bot an admin there. Unset -> empty -> flat single
           # chat, as before. See README "Folders (Telegram Topics)".
           TELEGRAM_TOPICS: ${{ secrets.TELEGRAM_TOPICS }}
+          # The ids of the three topics, fixed here so they do not depend on
+          # the cache: actions/cache drops entries unused for 7 days, and
+          # losing topics.json made the bot create a second set of topics.
+          # Not secret - a thread id is useless without the bot token.
+          # Only read when TELEGRAM_TOPICS is on.
+          TELEGRAM_TOPIC_IDS: '{"generali": 3190, "tech_ai": 3191, "finanza": 3192}'
           # Optional: third translation fallback for Dutch headlines. If the
           # secret is not set the variable arrives empty and the bot simply
           # skips that attempt.
