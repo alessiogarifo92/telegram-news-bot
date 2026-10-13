@@ -216,6 +216,12 @@ TELEGRAM_TOPICS = os.environ.get("TELEGRAM_TOPICS", "false").strip().lower() in 
 # actions/cache on GitHub, a plain gitignored file locally. Delete it to
 # make the bot create fresh topics on the next run.
 TOPIC_STATE_FILE = Path(os.environ.get("TOPIC_STATE_FILE", ".state/topics.json"))
+# Fixed topic ids, as JSON: {"generali": 3190, "tech_ai": 3191, ...}. When
+# a group is listed here the bot uses that id and never creates a topic for
+# it, whatever TOPIC_STATE_FILE says. This is what keeps the topics stable
+# on GitHub: actions/cache evicts entries unused for 7 days, so a week of
+# failed runs used to wipe topics.json and spawn a second set of topics.
+TELEGRAM_TOPIC_IDS = os.environ.get("TELEGRAM_TOPIC_IDS", "").strip()
 
 # --- Topic (forum) routing ---------------------------------------------
 # Each FEEDS entry carries a "group" key; every group maps to one Telegram
@@ -763,6 +769,19 @@ def create_forum_topic(name: str, icon_color: int) -> int | None:
     return int(thread_id)
 
 
+def _int_values(raw) -> dict[str, int]:
+    """Keep the entries of a {group_key: id} mapping whose id is an int."""
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, int] = {}
+    for key, value in (raw or {}).items():
+        try:
+            out[key] = int(value)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def load_topic_ids(path: Path) -> dict[str, int]:
     """Read back {group_key: message_thread_id} written on a previous run.
     A missing or unreadable file just means "no topics known yet"."""
@@ -773,13 +792,20 @@ def load_topic_ids(path: Path) -> dict[str, int]:
     except (OSError, ValueError) as exc:  # noqa: BLE001
         log.warning("Topic state at %s unreadable (%s): starting fresh.", path, exc)
         return {}
-    out: dict[str, int] = {}
-    for key, value in (raw or {}).items():
-        try:
-            out[key] = int(value)
-        except (TypeError, ValueError):
-            continue
-    return out
+    return _int_values(raw)
+
+
+def pinned_topic_ids() -> dict[str, int]:
+    """Parse TELEGRAM_TOPIC_IDS. Empty or malformed -> {} (with a warning
+    for malformed), so the bot falls back to TOPIC_STATE_FILE."""
+    if not TELEGRAM_TOPIC_IDS:
+        return {}
+    try:
+        raw = json.loads(TELEGRAM_TOPIC_IDS)
+    except ValueError as exc:
+        log.warning("TELEGRAM_TOPIC_IDS is not valid JSON (%s): ignored.", exc)
+        return {}
+    return _int_values(raw)
 
 
 def save_topic_ids(path: Path, ids: dict[str, int]) -> None:
@@ -799,17 +825,21 @@ def resolve_group_threads() -> dict[str, int | None]:
 
     - TELEGRAM_TOPICS off -> every value is None (flat single-chat send,
       the original behaviour).
-    - TELEGRAM_TOPICS on  -> each group maps to its remembered topic, or a
-      freshly created one. A group whose topic cannot be created stays None
+    - TELEGRAM_TOPICS on  -> each group maps to its id in TELEGRAM_TOPIC_IDS,
+      else its remembered topic, else a freshly created one. A group whose topic cannot be created stays None
       (routed to "General") and is NOT persisted, so a later run retries it.
     """
     if not TELEGRAM_TOPICS:
         return {key: None for key, _, _ in TOPIC_DEFINITIONS}
 
+    pinned = pinned_topic_ids()
     known = load_topic_ids(TOPIC_STATE_FILE)
     threads: dict[str, int | None] = {}
     changed = False
     for key, name, color in TOPIC_DEFINITIONS:
+        if key in pinned:
+            threads[key] = pinned[key]
+            continue
         if key in known:
             threads[key] = known[key]
             continue

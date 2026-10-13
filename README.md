@@ -437,6 +437,13 @@ sub-sections, so "Generali" is itself divided into Olanda / Italia / Mondo.
 5. **Run once.** The bot creates the three topics itself and writes their
    IDs to `.state/topics.json` (`TOPIC_STATE_FILE`), carried between runs
    by `actions/cache` the same way as `sent.json`. Later runs reuse them.
+6. **Pin the IDs.** Copy the three `message_thread_id` values from the
+   run's log (`Created topic '📰 Generali' (message_thread_id=…)`) into
+   `TELEGRAM_TOPIC_IDS` in `.github/workflows/daily-digest.yml`, e.g.
+   `{"generali": 3190, "tech_ai": 3191, "finanza": 3192}`. GitHub deletes
+   a cache nobody has used for 7 days, so after a week of failed runs
+   `topics.json` is gone and, without pinned IDs, the bot would create a
+   second set of topics.
 
 If anything in step 2 is missing — bot not admin, *Manage Topics* off, the
 chat not a forum — `createForumTopic` fails, the bot logs a warning and
@@ -447,7 +454,7 @@ The `reset-only` / `reset-and-send` workflow modes forget the *sent
 stories*, not the topics: `topics.json` is left in place so a reset does
 not spawn a second set of same-named topics. To rebuild the topics from
 scratch, delete `topics.json` (locally the file; on Actions, clear the
-cache) and run again.
+cache), empty `TELEGRAM_TOPIC_IDS` and run again.
 
 ---
 
@@ -490,6 +497,7 @@ on Actions) and all have defaults:
 | `TELEGRAM_CHAT_ID` | — | **Required.** Missing value fails immediately. |
 | `TELEGRAM_TOPICS` | `false` | `true` splits the digest across three forum topics. |
 | `TOPIC_STATE_FILE` | `.state/topics.json` | Where the created topic IDs are remembered. |
+| `TELEGRAM_TOPIC_IDS` | *(empty)* | JSON `{"generali": …, "tech_ai": …, "finanza": …}`: fixed topic IDs, used instead of `TOPIC_STATE_FILE`. |
 | `DEEPL_API_KEY` | *(empty)* | Optional third translation fallback. |
 | `HOURS_LOOKBACK` | `30` | How far back a feed entry can be. |
 | `MAX_ITEMS_PER_CATEGORY` | `10` | Ceiling on stories per category, after dedup. |
