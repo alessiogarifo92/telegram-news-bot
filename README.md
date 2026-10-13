@@ -3,7 +3,7 @@
 Sends a daily news digest to Telegram, in this priority order: Netherlands
 (NOS) → Italy (ANSA) → World (BBC) → AI (VentureBeat + The Verge AI +
 arXiv papers) → Tech (TechCrunch + The Verge + Ars Technica + The Guardian
-+ Hacker News) → Finance (Yahoo Finance). AI and Tech sit next to each
++ Hacker News) → Finance (Bloomberg Markets). AI and Tech sit next to each
 other on purpose; Finance is always last.
 
 **Amsterdam (AT5) was removed on 2026-08-29.** `https://www.at5.nl/rss`
@@ -415,7 +415,7 @@ threads, each with its own mute switch.
 |---|---|
 | 📰 **Generali** | Olanda (NOS) · Italia (ANSA) · Mondo (BBC) |
 | 🤖 **Tech & AI** | AI (VentureBeat, The Verge) · Paper arXiv · Tech (TechCrunch, The Verge, Ars Technica, The Guardian, Hacker News) |
-| 💰 **Finanza** | Yahoo Finance |
+| 💰 **Finanza** | Bloomberg Markets |
 
 Inside each topic the per-source section headers still separate the
 sub-sections, so "Generali" is itself divided into Olanda / Italia / Mondo.
@@ -604,9 +604,13 @@ digests a day from two different machines with two separate memories.
   python -c "import feedparser; print(feedparser.parse('URL').entries[:2])"
   ```
 
-- **Finance**: there is no reliable free RSS feed for serious financial
-  sources (Bloomberg, FT and WSJ are all paywalled). Alpha Vantage has a
-  free tier if you need real market data.
+- **Finance**: Bloomberg's free Markets feed is used because Yahoo
+  Finance's general feed is gone (404). Some Bloomberg articles are
+  paywalled, but the headline is the point of the digest. Free
+  alternatives that also work: CNBC
+  (`https://www.cnbc.com/id/100003114/device/rss/rss.html`) and the FT
+  markets feed (`https://www.ft.com/markets?format=rss`, paywalled). Alpha
+  Vantage has a free tier if you need real market data.
 - **A different time, or more than one digest a day**: change the `cron`
   expression in `daily-digest.yml`. It is always in UTC and does **not**
   follow daylight saving, so the local time shifts by an hour twice a year.

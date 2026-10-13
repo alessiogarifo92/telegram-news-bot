@@ -2,8 +2,8 @@
 Telegram "news digest" bot: once a day it collects the day's important
 stories from the Netherlands (NOS), Italy (general),
 the world (BBC), global AI (VentureBeat + The Verge), global tech
-(TechCrunch + Ars Technica + Hacker News) and global finance (Yahoo
-Finance) - and sends them to Telegram **one at a time, every story as its
+(TechCrunch + Ars Technica + Hacker News) and global finance (Bloomberg
+Markets) - and sends them to Telegram **one at a time, every story as its
 own message** - so each link gets its own preview (and "Instant View" where
 the site supports it) instead of everything ending up glued into a single
 block.
@@ -15,7 +15,7 @@ Send order (priority, top to bottom):
 4. AI (VentureBeat + The Verge AI)
 5. Tech (TechCrunch + Ars Technica + Hacker News) - AI and Tech are now
    adjacent, no longer separated by Finance
-6. Finance (Yahoo Finance) - always last
+6. Finance (Bloomberg Markets) - always last
 
 "Only the important stories": every configured feed is already the
 outlet's own editorial "top stories" selection (not a purely chronological
@@ -365,8 +365,12 @@ FEEDS = [
     {
         "emoji": "💰",
         "category": "Finanza globale",
-        "source": "Yahoo Finance",
-        "url": "https://finance.yahoo.com/news/rssindex",
+        # Yahoo Finance's general feed (finance.yahoo.com/news/rssindex)
+        # went 404 in October 2026 with no replacement; what Yahoo still
+        # serves is a per-ticker feed, chronological rather than curated.
+        # Some Bloomberg stories are paywalled; the headline still reads.
+        "source": "Bloomberg Markets",
+        "url": "https://feeds.bloomberg.com/markets/news.rss",
         "lang": "en",
         "group": GROUP_FINANCE,
     },
