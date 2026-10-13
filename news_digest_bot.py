@@ -1,7 +1,7 @@
 """
 Telegram "news digest" bot: once a day it collects the day's important
 stories from the Netherlands (NOS), Italy (general),
-the world (BBC), global AI (VentureBeat + The Verge), global tech
+the world (BBC), global AI (The Decoder + The Verge), global tech
 (TechCrunch + Ars Technica + Hacker News) and global finance (Bloomberg
 Markets) - and sends them to Telegram **one at a time, every story as its
 own message** - so each link gets its own preview (and "Instant View" where
@@ -12,7 +12,7 @@ Send order (priority, top to bottom):
 1. Netherlands (NOS general)
 2. Italy (ANSA)
 3. World (BBC)
-4. AI (VentureBeat + The Verge AI)
+4. AI (The Decoder + The Verge AI)
 5. Tech (TechCrunch + Ars Technica + Hacker News) - AI and Tech are now
    adjacent, no longer separated by Finance
 6. Finance (Bloomberg Markets) - always last
@@ -24,7 +24,7 @@ listing), so taking just the first N entries of each feed
 relevant stories according to that source.
 
 "No duplicates": AI and Tech deliberately use several different outlets
-(VentureBeat/The Verge/arXiv for AI, TechCrunch/Ars Technica/The
+(The Decoder/The Verge/arXiv for AI, TechCrunch/Ars Technica/The
 Guardian/Hacker News for tech) instead of several feeds from the same
 outlet, which overlap by nature. On top of that there is a global
 deduplication check (by exact link and by very similar title) that drops an
@@ -74,7 +74,7 @@ the entry at. See the note in FEEDS where it used to sit.
 For Dutch stories (NOS), every message carries both the original Dutch
 title and its English translation (and the English excerpt too, unless
 TRANSLATE_SUMMARIES is turned off). Translation tries three engines in
-order (all through `deep-translator`): Google Translate -> MyMemory (both
+order: Google Translate -> MyMemory (both
 free, no API key, but with shared quotas that run out from time to time)
 -> DeepL (needs a free `DEEPL_API_KEY` in `.env`, far more reliable; if it
 is not set this third attempt is skipped). If all three fail, the message
@@ -297,8 +297,11 @@ FEEDS = [
     {
         "emoji": "🤖",
         "category": "AI",
-        "source": "VentureBeat",
-        "url": "https://venturebeat.com/category/ai/feed/",
+        # Replaced VentureBeat, which answers every GitHub Actions runner
+        # with HTTP 429 whatever the User-Agent (an IP block, Oct 2026).
+        # The Decoder is AI-only and does not overlap the Tech sources.
+        "source": "The Decoder",
+        "url": "https://the-decoder.com/feed/",
         "lang": "en",
         "group": GROUP_TECH_AI,
     },
@@ -623,7 +626,7 @@ def _not_expired(entries: dict | None, cutoff: datetime) -> dict[str, str]:
 class Deduplicator:
     """Tracks the links and titles already sent, to discard substantially
     identical stories reported by different sources (e.g. the same AI story
-    on VentureBeat and The Verge on the same day).
+    on The Decoder and The Verge on the same day).
 
     It remembers on two levels: within the current run (two sources running
     the same story this morning) and ACROSS runs - `load()` reads back what
@@ -702,6 +705,24 @@ class Deduplicator:
 _MYMEMORY_LANG_CODES = {"nl": "nl-NL", "it": "it-IT"}
 
 
+def _google_translate(text: str, source_lang: str) -> str | None:
+    """Google Translate through its public JSON endpoint (the one the
+    browser widget uses). deep-translator's GoogleTranslator scrapes the
+    translate.google.com web page instead, and Google answers that with
+    "too many requests" on every GitHub Actions runner; this endpoint
+    works from the same machines. Raises on HTTP/parse errors."""
+    resp = requests.get(
+        "https://translate.googleapis.com/translate_a/single",
+        params={"client": "gtx", "sl": source_lang, "tl": "en", "dt": "t", "q": text},
+        timeout=15,
+    )
+    resp.raise_for_status()
+    # [[["translated chunk", "original chunk", ...], ...], ...] - one entry
+    # per sentence, to be glued back together.
+    chunks = resp.json()[0] or []
+    return "".join(chunk[0] for chunk in chunks if chunk and chunk[0]).strip() or None
+
+
 def translate_to_english(text: str, source_lang: str) -> str | None:
     """Try, in order, Google Translate -> MyMemory -> DeepL (if
     `DEEPL_API_KEY` is set). The first two are free and need no API key but
@@ -712,9 +733,7 @@ def translate_to_english(text: str, source_lang: str) -> str | None:
     if ALL available attempts fail, so the caller can send just the
     original title instead of failing the whole digest."""
     try:
-        from deep_translator import GoogleTranslator
-
-        result = GoogleTranslator(source=source_lang, target="en").translate(text)
+        result = _google_translate(text, source_lang)
         if result:
             return result
     except Exception as exc:  # noqa: BLE001
