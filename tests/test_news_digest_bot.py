@@ -28,6 +28,10 @@ class DummyResponse:
     def json(self):
         return self._payload
 
+    def raise_for_status(self):
+        if not self.ok:
+            raise bot.requests.HTTPError(f"HTTP {self.status_code}")
+
 
 @pytest.fixture(autouse=True)
 def _fake_env(monkeypatch):
@@ -366,3 +370,39 @@ def test_send_category_respects_the_per_category_cap(monkeypatch):
     items = [{"title": t, "link": f"https://x.test/{i}", "summary": ""} for i, t in enumerate(titles)]
     bot.send_category(_feed(), items, d, thread_id=None)
     assert len(stories) == 2
+
+
+# --------------------------------------------------------------------------
+# translation
+# --------------------------------------------------------------------------
+
+def test_google_translate_joins_sentence_chunks(monkeypatch):
+    payload = [[["Major cyber incident. ", "Groot cyberincident. ", None],
+                ["Customers cannot order.", "Klanten kunnen niet bestellen.", None]],
+               None, "nl"]
+    seen = {}
+
+    def fake_get(url, params, timeout):
+        seen.update(params)
+        return DummyResponse(payload=payload)
+
+    monkeypatch.setattr(bot.requests, "get", fake_get)
+    out = bot._google_translate("Groot cyberincident. Klanten kunnen niet bestellen.", "nl")
+    assert out == "Major cyber incident. Customers cannot order."
+    assert seen["sl"] == "nl" and seen["tl"] == "en"
+
+
+def test_translate_falls_back_to_mymemory_when_google_fails(monkeypatch):
+    monkeypatch.setattr(bot.requests, "get",
+                        lambda url, params, timeout: DummyResponse(ok=False, status_code=429))
+
+    class FakeMyMemory:
+        def __init__(self, source, target):
+            assert source == "nl-NL"
+
+        def translate(self, text):
+            return "from MyMemory"
+
+    import deep_translator
+    monkeypatch.setattr(deep_translator, "MyMemoryTranslator", FakeMyMemory)
+    assert bot.translate_to_english("Hallo", "nl") == "from MyMemory"

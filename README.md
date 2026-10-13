@@ -1,7 +1,7 @@
 # News Digest Bot — Telegram
 
 Sends a daily news digest to Telegram, in this priority order: Netherlands
-(NOS) → Italy (ANSA) → World (BBC) → AI (VentureBeat + The Verge AI +
+(NOS) → Italy (ANSA) → World (BBC) → AI (The Decoder + The Verge AI +
 arXiv papers) → Tech (TechCrunch + The Verge + Ars Technica + The Guardian
 + Hacker News) → Finance (Bloomberg Markets). AI and Tech sit next to each
 other on purpose; Finance is always last.
@@ -96,7 +96,7 @@ Each run goes through four stages:
 2. **Deduplicate** — an item is discarded if its link was already sent, or
    if its title is at least `DUPLICATE_TITLE_THRESHOLD` similar (0–1,
    default 0.6) to one already sent. This runs across the whole digest, so
-   the same story reported by VentureBeat and The Verge only goes out once.
+   the same story reported by The Decoder and The Verge only goes out once.
    It also runs **across days** — see
    [What counts as "new"](#what-counts-as-new).
 3. **Cap** — at most `MAX_ITEMS_PER_CATEGORY` surviving items per category
@@ -414,7 +414,7 @@ threads, each with its own mute switch.
 | Topic | Contains |
 |---|---|
 | 📰 **Generali** | Olanda (NOS) · Italia (ANSA) · Mondo (BBC) |
-| 🤖 **Tech & AI** | AI (VentureBeat, The Verge) · Paper arXiv · Tech (TechCrunch, The Verge, Ars Technica, The Guardian, Hacker News) |
+| 🤖 **Tech & AI** | AI (The Decoder, The Verge) · Paper arXiv · Tech (TechCrunch, The Verge, Ars Technica, The Guardian, Hacker News) |
 | 💰 **Finanza** | Bloomberg Markets |
 
 Inside each topic the per-source section headers still separate the
