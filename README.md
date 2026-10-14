@@ -146,6 +146,17 @@ Two deliberate choices in that cron expression:
   repositories, and round times are the most congested. An odd minute
   measurably reduces the typical delay.
 
+**The schedule is only the fallback.** In practice GitHub starts it 4–9
+hours late (August–October 2026: runs began between 10:30 and 15:30 UTC),
+so the digest arrived at lunch, not breakfast. The on-time start now comes
+from a **Claude Code Routine** ("Telegram digest 08:17"), which calls
+`workflow_dispatch` every day at 08:17 Europe/Rome; dispatched runs start
+within seconds. The late scheduled run still fires, but its first job
+(`already-sent`) checks whether a run of this workflow already succeeded
+today (UTC) and, if so, skips sending. A `concurrency` group queues the two
+if they ever overlap, so the check always sees the earlier run's result.
+If the Routine misses a day, the scheduled run sends as before, just late.
+
 The job also restores and saves `.state/` via `actions/cache`, which is
 what gives the bot memory between runs:
 
