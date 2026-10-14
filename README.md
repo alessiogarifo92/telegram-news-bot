@@ -149,13 +149,22 @@ Two deliberate choices in that cron expression:
 **The schedule is only the fallback.** In practice GitHub starts it 4–9
 hours late (August–October 2026: runs began between 10:30 and 15:30 UTC),
 so the digest arrived at lunch, not breakfast. The on-time start now comes
-from a **Claude Code Routine** ("Telegram digest 08:17"), which calls
+from an external cron, a free **cron-job.org** job that calls
 `workflow_dispatch` every day at 08:17 Europe/Rome; dispatched runs start
-within seconds. The late scheduled run still fires, but its first job
+within seconds. The job, configured on cron-job.org:
+
+- URL: `https://api.github.com/repos/alessiogarifo92/telegram-news-bot/actions/workflows/daily-digest.yml/dispatches`
+- Method `POST`, body `{"ref":"main","inputs":{"mode":"send"}}`
+- Headers: `Authorization: Bearer <token>`, `Accept: application/vnd.github+json`,
+  `X-GitHub-Api-Version: 2022-11-28`, `Content-Type: application/json`
+- Token: a fine-grained personal access token limited to this repository,
+  permission **Actions: Read and write** only. GitHub answers `204` on
+  success. When the token expires the call fails and the fallback below
+  takes over until it is renewed. The late scheduled run still fires, but its first job
 (`already-sent`) checks whether a run of this workflow already succeeded
 today (UTC) and, if so, skips sending. A `concurrency` group queues the two
 if they ever overlap, so the check always sees the earlier run's result.
-If the Routine misses a day, the scheduled run sends as before, just late.
+If the external call misses a day, the scheduled run sends as before, just late.
 
 The job also restores and saves `.state/` via `actions/cache`, which is
 what gives the bot memory between runs:

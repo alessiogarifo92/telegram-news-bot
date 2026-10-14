@@ -18,11 +18,11 @@ on:
     #
     # In practice GitHub starts this schedule 4-9 hours late (measured over
     # August-October 2026: runs began between 10:30 and 15:30 UTC). So the
-    # on-time start now comes from outside: a Claude Code Routine calls
-    # workflow_dispatch every day at 08:17 Europe/Rome, and dispatched runs
-    # start immediately. This cron stays as the fallback for a day the
-    # Routine does not fire: the "already-sent" job below makes it skip
-    # when today's digest has already gone out.
+    # on-time start now comes from outside: a cron-job.org job calls
+    # workflow_dispatch every day at 08:17 Europe/Rome (see README), and
+    # dispatched runs start immediately. This cron stays as the fallback
+    # for a day that call does not happen: the "already-sent" job below
+    # makes it skip when today's digest has already gone out.
     - cron: '17 6 * * *'
   # Allows starting it by hand from the "Actions" tab, useful for testing.
   workflow_dispatch:
@@ -49,7 +49,7 @@ permissions:
 
 jobs:
   # Only a scheduled run can be a duplicate: a dispatched one (the daily
-  # Routine, or a press of the button) always goes ahead.
+  # cron-job.org call, or a press of the button) always goes ahead.
   already-sent:
     runs-on: ubuntu-latest
     outputs:
