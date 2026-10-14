@@ -15,6 +15,14 @@ on:
     # evening peak of US AI/tech announcements from the day before (which
     # tails off around 23:00 CET), so nothing is missed: the news arrives
     # all at once at breakfast instead of scattered through the day.
+    #
+    # In practice GitHub starts this schedule 4-9 hours late (measured over
+    # August-October 2026: runs began between 10:30 and 15:30 UTC). So the
+    # on-time start now comes from outside: a cron-job.org job calls
+    # workflow_dispatch every day at 08:17 Europe/Rome (see README), and
+    # dispatched runs start immediately. This cron stays as the fallback
+    # for a day that call does not happen: the "already-sent" job below
+    # makes it skip when today's digest has already gone out.
     - cron: '17 6 * * *'
   # Allows starting it by hand from the "Actions" tab, useful for testing.
   workflow_dispatch:
@@ -28,8 +36,48 @@ on:
           - reset-and-send       # forget everything, then send a full digest
           - reset-only           # forget everything and send nothing
 
+# One run at a time, queued rather than cancelled: if the fallback schedule
+# fires while the dispatched run is still going, it waits for it to finish,
+# and the "already-sent" check then sees that run's success and skips.
+concurrency:
+  group: daily-digest
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read   # the already-sent check lists this workflow's runs
+
 jobs:
+  # Only a scheduled run can be a duplicate: a dispatched one (the daily
+  # cron-job.org call, or a press of the button) always goes ahead.
+  already-sent:
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          today=$(date -u +%F)
+          done_today=$(gh api \
+            "repos/${{ github.repository }}/actions/workflows/daily-digest.yml/runs?status=success&created=%3E%3D${today}" \
+            --jq '.total_count')
+          echo "Successful runs today (UTC): ${done_today}"
+          if [ "${done_today}" -gt 0 ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Today's digest already went out; the fallback schedule skips."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
   send-digest:
+    needs: already-sent
+    if: needs.already-sent.outputs.skip != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
